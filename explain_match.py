@@ -9,6 +9,7 @@ World Cup prediction project root so it can import the project-specific
 from __future__ import annotations
 
 import argparse
+import copy
 import importlib
 import inspect
 import json
@@ -154,8 +155,10 @@ class ModelBundle:
     model: Any
     feature_names: list[str]
     class_labels: list[Any]
+    state: Any | None = None
+    country_features: dict[str, dict[str, float]] | None = None
     train_X: pd.DataFrame | None = None
-    train_y: pd.Series | None = None
+    train_y: pd.Series | np.ndarray | None = None
     train_probabilities: np.ndarray | None = None
 
 
@@ -179,6 +182,7 @@ class ExplanationContext:
     away: str
     year: int
     stage: int
+    match_date: pd.Timestamp
     root: Path
     output_dir: Path
     notes: RuntimeNotes
@@ -283,95 +287,54 @@ def load_country_history(shared: Any | None, root: Path, notes: RuntimeNotes) ->
         return None
 
 
-def country_features_for(
+def country_feature_map_for_year(
     shared: Any | None,
     history: Any,
-    team: str,
     year: int,
     notes: RuntimeNotes,
-) -> dict[str, Any]:
-    if shared is None or not hasattr(shared, "country_features_for_year"):
+) -> dict[str, dict[str, float]]:
+    if shared is None or not hasattr(shared, "country_features_for_year") or history is None:
         return {}
-    func = shared.country_features_for_year
-    attempts = [
-        ((history, team, year), {}),
-        ((history, year, team), {}),
-        ((team, year, history), {}),
-        ((team, year), {"history": history}),
-        ((), {"history": history, "country": team, "year": year}),
-        ((), {"country_history": history, "country": team, "year": year}),
-        ((), {"country": team, "year": year}),
-    ]
+    feature_year = min(int(year), 2022)
     try:
-        features = flexible_call(func, attempts)
+        features = shared.country_features_for_year(history, feature_year)
     except Exception as exc:
-        notes.warn(f"Could not load country features for {team}: {exc}")
+        notes.warn(f"Could not load country feature map for {feature_year}: {exc}")
         return {}
-    if features is None:
-        return {}
-    if isinstance(features, pd.Series):
-        return features.to_dict()
-    if isinstance(features, Mapping):
-        return dict(features)
-    if isinstance(features, pd.DataFrame) and len(features) == 1:
-        return features.iloc[0].to_dict()
-    return {"country_features": features}
+    notes.detail(f"Loaded country feature map for {feature_year} through `shared.country_features_for_year()`.")
+    return dict(features or {})
 
 
-def build_match_row(
+def build_match_features_from_state(
     ctx: ExplanationContext,
-    home_features: Mapping[str, Any],
-    away_features: Mapping[str, Any],
+    bundle: ModelBundle,
+    country_features: Mapping[str, Mapping[str, float]],
+    match_date: pd.Timestamp,
+    *,
+    state: Any | None = None,
+    neutral: bool = True,
+    is_home: bool = False,
 ) -> pd.DataFrame:
-    base = {
-        "home_team": ctx.home,
-        "away_team": ctx.away,
-        "year": ctx.year,
-        "stage": ctx.stage,
-        "neutral": 1,
-    }
-    if ctx.shared is not None and hasattr(ctx.shared, "compute_match_features"):
-        func = ctx.shared.compute_match_features
-        row = pd.Series(base)
-        attempts = [
-            ((ctx.home, ctx.away, ctx.year, ctx.stage), {}),
-            ((ctx.home, ctx.away), {"year": ctx.year, "stage": ctx.stage}),
-            ((row,), {}),
-            ((row, home_features, away_features), {}),
-            ((dict(base), home_features, away_features), {}),
-            ((), {"home": ctx.home, "away": ctx.away, "year": ctx.year, "stage": ctx.stage}),
-            (
-                (),
-                {
-                    "home_team": ctx.home,
-                    "away_team": ctx.away,
-                    "year": ctx.year,
-                    "stage": ctx.stage,
-                    "home_country_features": home_features,
-                    "away_country_features": away_features,
-                },
-            ),
-        ]
-        try:
-            features = flexible_call(func, attempts)
-            frame = coerce_feature_frame(features)
-            if frame is not None and not frame.empty:
-                ctx.notes.detail("Built match features through `shared.compute_match_features()`.")
-                return frame
-        except Exception as exc:
-            ctx.notes.warn(f"`shared.compute_match_features()` could not build this matchup: {exc}")
-
-    fallback: dict[str, Any] = dict(base)
-    for key, value in home_features.items():
-        fallback[f"home_{key}"] = value
-    for key, value in away_features.items():
-        fallback[f"away_{key}"] = value
-    for key in set(home_features) & set(away_features):
-        h_val, a_val = home_features.get(key), away_features.get(key)
-        if is_number(h_val) and is_number(a_val):
-            fallback[f"{key}_diff"] = float(h_val) - float(a_val)
-    ctx.notes.warn("Using fallback feature assembly because project feature engineering was unavailable.")
-    return pd.DataFrame([fallback])
+    if ctx.shared is None or not hasattr(ctx.shared, "compute_match_features"):
+        raise RuntimeError("Project `shared.compute_match_features()` is required for explanations.")
+    active_state = state if state is not None else bundle.state
+    if active_state is None:
+        raise RuntimeError("Prediction state is required for match explanations.")
+    features = ctx.shared.compute_match_features(
+        ctx.home,
+        ctx.away,
+        active_state,
+        country_features,
+        ctx.stage,
+        match_date,
+        neutral,
+        is_home,
+    )
+    frame = coerce_feature_frame(features)
+    if frame is None or frame.empty:
+        raise RuntimeError("Project feature builder returned no features.")
+    ctx.notes.detail("Built match features through strict `shared.compute_match_features()` call.")
+    return frame
 
 
 def coerce_feature_frame(value: Any) -> pd.DataFrame | None:
@@ -426,55 +389,89 @@ def load_model_from_file(path: Path, notes: RuntimeNotes) -> Any:
     raise RuntimeError(f"Unsupported model file: {path}")
 
 
-def load_model_from_predict_module(module: Any | None, notes: RuntimeNotes) -> Any | None:
+def bundle_from_training_parts(
+    model: Any,
+    state: Any,
+    feature_names: Sequence[str],
+    notes: RuntimeNotes,
+    train_X: pd.DataFrame | None = None,
+    train_y: Any | None = None,
+    country_features: dict[str, dict[str, float]] | None = None,
+) -> ModelBundle:
+    class_labels = list(getattr(model, "classes_", OUTCOME_LABELS))
+    if len(class_labels) == 0:
+        class_labels = OUTCOME_LABELS
+    return ModelBundle(
+        model=model,
+        state=state,
+        feature_names=list(feature_names),
+        class_labels=class_labels,
+        train_X=train_X,
+        train_y=train_y,
+        country_features=country_features,
+    )
+
+
+def load_model_from_predict_module(module: Any | None, notes: RuntimeNotes) -> ModelBundle | None:
     if module is None:
         return None
-    # First try no-arg functions
-    function_names = (
-        "load_model",
-        "get_model",
-        "build_model",
-        "main_model",
-    )
-    for name in function_names:
-        if hasattr(module, name) and callable(getattr(module, name)):
-            func = getattr(module, name)
-            attempts = [((), {}), ((), {"return_model": True}), ((), {"train": True})]
+    try:
+        import shared as _shared
+        results_path = _shared.DATA_DIR / "results.csv"
+        results_df = pd.read_csv(results_path)
+        country_history = _shared.load_country_feature_history()
+    except Exception as exc:
+        notes.warn(f"Could not load training inputs for `predict_2026`: {exc}")
+        return None
+
+    def prepare_state(state: Any) -> Any:
+        if hasattr(module, "prepare_2026_state") and callable(getattr(module, "prepare_2026_state")):
             try:
-                model = flexible_call(func, attempts)
-            except Exception:
-                continue
-            if has_predict_proba(model):
-                notes.detail(f"Loaded model through `predict_2026.{name}()`.")
-                return model
-            if isinstance(model, tuple):
-                for item in model:
-                    if has_predict_proba(item):
-                        notes.detail(f"Loaded model from tuple returned by `predict_2026.{name}()`.")
-                        return item
-    # Try train_model with proper args (results_df, country_history)
+                return module.prepare_2026_state(results_df, state)
+            except Exception as exc:
+                notes.warn(f"Could not apply 2026 prediction state updates: {exc}")
+        return state
+
+    if hasattr(module, "train_model_bundle") and callable(getattr(module, "train_model_bundle")):
+        try:
+            result = module.train_model_bundle(results_df, country_history)
+            model = getattr(result, "model", None)
+            state = getattr(result, "state", None)
+            feature_names = getattr(result, "feature_names", None)
+            if has_predict_proba(model) and state is not None and feature_names:
+                notes.detail("Trained model bundle through `predict_2026.train_model_bundle()`.")
+                return bundle_from_training_parts(
+                    model=model,
+                    state=prepare_state(state),
+                    feature_names=list(feature_names),
+                    notes=notes,
+                    train_X=getattr(result, "train_X", None),
+                    train_y=getattr(result, "train_y", None),
+                    country_features=getattr(result, "country_features", None),
+                )
+        except Exception as exc:
+            notes.warn(f"Could not train via `predict_2026.train_model_bundle()`: {exc}")
+
     if hasattr(module, "train_model") and callable(getattr(module, "train_model")):
         try:
-            import shared as _shared
-            results_path = _shared.DATA_DIR / "results.csv"
-            results_df = pd.read_csv(results_path)
-            country_history = _shared.load_country_feature_history()
             result = module.train_model(results_df, country_history)
+            if isinstance(result, tuple) and len(result) >= 3 and has_predict_proba(result[0]):
+                model, state, feature_names = result[:3]
+                train_X = result[3] if len(result) >= 4 and isinstance(result[3], pd.DataFrame) else None
+                train_y = result[4] if len(result) >= 5 else None
+                notes.detail("Trained model/state/schema through `predict_2026.train_model()`.")
+                return bundle_from_training_parts(
+                    model=model,
+                    state=prepare_state(state),
+                    feature_names=list(feature_names),
+                    notes=notes,
+                    train_X=train_X,
+                    train_y=train_y,
+                )
             if has_predict_proba(result):
-                notes.detail("Trained model through `predict_2026.train_model(results_df, country_history)`.")
-                return result
-            if isinstance(result, tuple):
-                for item in result:
-                    if has_predict_proba(item):
-                        notes.detail("Trained model from tuple returned by `predict_2026.train_model()`.")
-                        return item
+                notes.warn("`predict_2026.train_model()` returned a bare model without state/schema; ignoring it.")
         except Exception as exc:
             notes.warn(f"Could not train via `predict_2026.train_model()`: {exc}")
-    for name in ("model", "clf", "xgb_model", "classifier"):
-        candidate = getattr(module, name, None)
-        if has_predict_proba(candidate):
-            notes.detail(f"Loaded model from `predict_2026.{name}`.")
-            return candidate
     return None
 
 
@@ -482,8 +479,9 @@ def has_predict_proba(model: Any) -> bool:
     return model is not None and callable(getattr(model, "predict_proba", None))
 
 
-def discover_match_data(root: Path, explicit: str | None, notes: RuntimeNotes) -> pd.DataFrame | None:
-    path = Path(explicit).expanduser() if explicit else discover_first(root, MATCH_DATA_PATTERNS)
+def discover_match_data(root: Path, explicit: str | None, notes: RuntimeNotes, shared: Any | None = None) -> pd.DataFrame | None:
+    default_path = root / "data" / "results.csv"
+    path = Path(explicit).expanduser() if explicit else (default_path if default_path.exists() else discover_first(root, MATCH_DATA_PATTERNS))
     if path is None:
         notes.warn("No match history CSV was found; historical sections will be limited.")
         return None
@@ -492,6 +490,11 @@ def discover_match_data(root: Path, explicit: str | None, notes: RuntimeNotes) -
     except Exception as exc:
         notes.warn(f"Could not read match history `{path}`: {exc}")
         return None
+    if shared is not None and hasattr(shared, "harmonize_columns"):
+        try:
+            df = shared.harmonize_columns(df, ["home_team", "away_team", "country"])
+        except Exception as exc:
+            notes.warn(f"Could not harmonize match history country names: {exc}")
     notes.detail(f"Loaded match history from `{path}`.")
     return df
 
@@ -546,9 +549,11 @@ def prepare_X(frame: pd.DataFrame, feature_names: Sequence[str] | None = None) -
             frame[col] = pd.to_numeric(frame[col], errors="coerce")
     frame = frame.replace([np.inf, -np.inf], np.nan)
     if feature_names:
-        for name in feature_names:
-            if name not in frame:
-                frame[name] = 0.0
+        missing = [name for name in feature_names if name not in frame.columns]
+        if missing:
+            preview = ", ".join(missing[:25])
+            suffix = " ..." if len(missing) > 25 else ""
+            raise RuntimeError(f"Feature schema mismatch. Missing trained features: {preview}{suffix}")
         frame = frame[list(feature_names)]
     return frame.fillna(0.0)
 
@@ -558,60 +563,25 @@ def train_model_with_shared(
     matches: pd.DataFrame | None,
     notes: RuntimeNotes,
 ) -> tuple[Any | None, pd.DataFrame | None, pd.Series | None]:
-    if shared is None or not hasattr(shared, "fit_xgb_with_validation"):
-        return None, None, None
-    func = shared.fit_xgb_with_validation
-    attempts: list[tuple[tuple[Any, ...], dict[str, Any]]] = [((), {})]
-    if matches is not None:
-        attempts.extend([((matches,), {}), ((), {"matches": matches}), ((), {"df": matches})])
-    try:
-        result = flexible_call(func, attempts)
-    except Exception as exc:
-        notes.warn(f"Could not train via `shared.fit_xgb_with_validation()`: {exc}")
-        return None, None, None
-    model = None
-    train_X = None
-    train_y = None
-    if has_predict_proba(result):
-        model = result
-    elif isinstance(result, Mapping):
-        for key in ("model", "xgb_model", "clf", "classifier"):
-            if has_predict_proba(result.get(key)):
-                model = result[key]
-        for key in ("X", "X_train", "features", "train_X"):
-            if isinstance(result.get(key), pd.DataFrame):
-                train_X = result[key]
-        for key in ("y", "y_train", "target", "train_y"):
-            if result.get(key) is not None:
-                train_y = pd.Series(result[key])
-    elif isinstance(result, tuple):
-        for item in result:
-            if has_predict_proba(item):
-                model = item
-            elif isinstance(item, pd.DataFrame) and train_X is None:
-                train_X = item
-            elif isinstance(item, (pd.Series, np.ndarray, list)) and train_y is None:
-                arr = pd.Series(item)
-                if len(arr) > 0 and len(arr) != 3:
-                    train_y = arr
-    if model is not None:
-        notes.detail("Trained/loaded model through `shared.fit_xgb_with_validation()`.")
-    return model, train_X, train_y
+    notes.warn("Direct training through `shared.fit_xgb_with_validation()` is disabled; use `predict_2026.train_model_bundle()`.")
+    return None, None, None
 
 
 def build_model_bundle(
     ctx: ExplanationContext,
-    row: pd.DataFrame,
     model_path: str | None,
 ) -> ModelBundle:
     model = None
-    train_X = None
-    train_y = None
     if model_path:
         model = load_model_from_file(Path(model_path).expanduser(), ctx.notes)
-    if model is None:
-        model = load_model_from_predict_module(ctx.predict_2026, ctx.notes)
-    if model is None:
+    bundle = load_model_from_predict_module(ctx.predict_2026, ctx.notes)
+    if bundle is not None:
+        if model is not None:
+            bundle.model = model
+            bundle.class_labels = list(getattr(model, "classes_", bundle.class_labels))
+            ctx.notes.detail("Using explicit model file with state/schema from `predict_2026` training.")
+        return bundle
+    if model_path is None:
         candidate = discover_first(ctx.root, MODEL_PATTERNS, looks_like_xgb_model)
         if candidate is not None:
             try:
@@ -619,16 +589,10 @@ def build_model_bundle(
             except Exception as exc:
                 ctx.notes.warn(f"Could not load discovered model `{candidate}`: {exc}")
     if model is None:
-        model, train_X, train_y = train_model_with_shared(ctx.shared, ctx.matches, ctx.notes)
-    if model is None:
         raise RuntimeError(
             "No usable model was found. Run this from the project root or pass `--model-path`."
         )
-    feature_names = get_feature_names(model, train_X, row)
-    class_labels = list(getattr(model, "classes_", OUTCOME_LABELS))
-    if len(class_labels) == 0:
-        class_labels = OUTCOME_LABELS
-    return ModelBundle(model=model, feature_names=feature_names, class_labels=class_labels, train_X=train_X, train_y=train_y)
+    raise RuntimeError("A model file alone is not enough to explain this project; prediction state and feature schema are required.")
 
 
 def class_index(labels: Sequence[Any], kind: str, fallback: int) -> int:
@@ -698,7 +662,17 @@ def compute_shap_contrast(
         else:
             values = arr.reshape(-1)
             base_value = 0.0
-    notes.detail("Computed SHAP contrast as home-team contribution minus away-team contribution.")
+    try:
+        margin = np.asarray(bundle.model.predict(X, output_margin=True))
+        expected_margin_diff = float(margin[0, h] - margin[0, a]) if margin.ndim == 2 and margin.shape[1] > max(h, a) else None
+        actual_margin_diff = float(base_value + values.sum())
+        if expected_margin_diff is not None and not np.isclose(expected_margin_diff, actual_margin_diff, atol=1e-3):
+            notes.warn("SHAP additivity check did not match the model margin exactly; interpret local contributions cautiously.")
+    except Exception:
+        pass
+    notes.detail(
+        "Computed SHAP contrast on the model's raw multiclass margin: home-win margin contribution minus away-win margin contribution."
+    )
     return values.astype(float), float(base_value), explainer
 
 
@@ -797,14 +771,23 @@ def save_shap_plots(
     return waterfall_path, force_path
 
 
-def team_matches(df: pd.DataFrame | None, cols: MatchColumns, team: str) -> pd.DataFrame:
+def team_matches(
+    df: pd.DataFrame | None,
+    cols: MatchColumns,
+    team: str,
+    match_date: pd.Timestamp | None = None,
+) -> pd.DataFrame:
     if df is None or not cols.home_team or not cols.away_team:
         return pd.DataFrame()
     mask = df[cols.home_team].astype(str).eq(team) | df[cols.away_team].astype(str).eq(team)
     out = df.loc[mask].copy()
     if cols.date:
         out[cols.date] = pd.to_datetime(out[cols.date], errors="coerce")
+        if match_date is not None:
+            out = out[out[cols.date] < match_date]
         out = out.sort_values(cols.date)
+    if cols.home_score and cols.away_score:
+        out = out[out[cols.home_score].notna() & out[cols.away_score].notna()]
     return out
 
 
@@ -855,7 +838,13 @@ def elo_trajectory(df: pd.DataFrame, cols: MatchColumns, team: str, n: int = 20)
     return points
 
 
-def h2h_record(df: pd.DataFrame | None, cols: MatchColumns, home: str, away: str) -> dict[str, Any]:
+def h2h_record(
+    df: pd.DataFrame | None,
+    cols: MatchColumns,
+    home: str,
+    away: str,
+    match_date: pd.Timestamp | None = None,
+) -> dict[str, Any]:
     empty = {"all_time": None, "last_10_years": None, "matches": pd.DataFrame()}
     if df is None or not cols.home_team or not cols.away_team:
         return empty
@@ -868,7 +857,11 @@ def h2h_record(df: pd.DataFrame | None, cols: MatchColumns, home: str, away: str
         return {**empty, "matches": matches}
     if cols.date:
         matches[cols.date] = pd.to_datetime(matches[cols.date], errors="coerce")
+        if match_date is not None:
+            matches = matches[matches[cols.date] < match_date]
         matches = matches.sort_values(cols.date)
+    if matches.empty:
+        return {**empty, "matches": matches}
 
     def summarize(part: pd.DataFrame) -> dict[str, int]:
         home_wins = away_wins = draws = 0
@@ -894,32 +887,34 @@ def h2h_record(df: pd.DataFrame | None, cols: MatchColumns, home: str, away: str
     return {"all_time": summarize(matches), "last_10_years": summarize(last_10), "matches": matches}
 
 
-def world_cup_history(df: pd.DataFrame | None, cols: MatchColumns, team: str) -> dict[str, Any]:
-    if df is None or not cols.tournament or not cols.home_team or not cols.away_team:
+def world_cup_history(team: str, through_year: int = 2026) -> dict[str, Any]:
+    try:
+        from collect_data import WC_PARTICIPANTS
+        from shared import GROUP_2026_TEAMS, WC_WINNERS, harmonize_country
+    except Exception:
         return {"available": False}
-    wc = df[df[cols.tournament].astype(str).str.contains("world cup", case=False, na=False)].copy()
-    if wc.empty:
-        return {"available": False}
-    team_wc = team_matches(wc, cols, team)
-    if team_wc.empty:
-        return {"available": True, "participations": 0, "titles": 0, "recent": []}
-    years = []
-    if cols.date:
-        dates = pd.to_datetime(team_wc[cols.date], errors="coerce")
-        years = sorted(dates.dt.year.dropna().astype(int).unique().tolist())
-    titles = 0
-    if cols.stage and cols.home_score and cols.away_score:
-        finals = team_wc[team_wc[cols.stage].astype(str).str.contains("final", case=False, na=False)]
-        for _, row in finals.iterrows():
-            result = result_for_row(row, cols, team)
-            if result["outcome"] == "W":
-                titles += 1
+    canonical = harmonize_country(team)
+    years = [
+        int(year)
+        for year, participants in WC_PARTICIPANTS.items()
+        if int(year) <= through_year and canonical in {harmonize_country(t) for t in participants}
+    ]
+    if through_year >= 2026:
+        wc26_teams = {harmonize_country(t) for teams in GROUP_2026_TEAMS.values() for t in teams}
+        if canonical in wc26_teams and 2026 not in years:
+            years.append(2026)
+    years = sorted(years)
+    titles = sum(
+        1
+        for year, winner in WC_WINNERS.items()
+        if int(year) <= through_year and harmonize_country(winner) == canonical
+    )
     return {
         "available": True,
-        "participations": len(years) if years else None,
+        "participations": len(years),
         "years": years[-8:],
         "titles": titles,
-        "recent": [result_for_row(row, cols, team) for _, row in team_wc.tail(5).iterrows()],
+        "recent": [],
     }
 
 
@@ -1041,61 +1036,67 @@ def brier_note(bundle: ModelBundle) -> str:
     return f"Multiclass Brier score on available training data: {brier:.4f}. Full reliability/resolution decomposition needs held-out bins."
 
 
-def apply_counterfactual(
+def reverse_h2h_state(state: Any, home: str, away: str) -> None:
+    key = tuple(sorted([home, away]))
+    for team in (home, away):
+        record = state[team]["h2h"].get(key)
+        if not record:
+            continue
+        record["wins"], record["losses"] = record["losses"], record["wins"]
+        record["gf"], record["ga"] = record["ga"], record["gf"]
+
+
+def counterfactuals(
+    ctx: ExplanationContext,
+    bundle: ModelBundle,
     X: pd.DataFrame,
-    scenario: str,
-    home_is_underdog: bool,
-) -> tuple[pd.DataFrame, str]:
-    X_cf = X.copy()
-    changed: list[str] = []
-    normalized = {normalize_feature_name(c): c for c in X_cf.columns}
-    if scenario == "underdog_elo_plus_100":
-        for norm, col in normalized.items():
-            if "elo" not in norm:
-                continue
-            if "diff" in norm:
-                X_cf[col] = X_cf[col] + (100 if home_is_underdog else -100)
-                changed.append(col)
-            elif home_is_underdog and "home" in norm:
-                X_cf[col] = X_cf[col] + 100
-                changed.append(col)
-            elif (not home_is_underdog) and "away" in norm:
-                X_cf[col] = X_cf[col] + 100
-                changed.append(col)
-    elif scenario == "h2h_reversed":
-        for norm, col in normalized.items():
-            if "h2h" in norm or "head_to_head" in norm or "head2head" in norm:
-                value = X_cf.iloc[0][col]
-                if is_number(value):
-                    X_cf[col] = -float(value) if abs(float(value)) > 1 else 1 - float(value)
-                    changed.append(col)
-    elif scenario == "underdog_home":
-        for norm, col in normalized.items():
-            if "neutral" in norm:
-                X_cf[col] = 0
-                changed.append(col)
-            elif "home_adv" in norm or "host" in norm or "venue" in norm:
-                if is_number(X_cf.iloc[0][col]):
-                    X_cf[col] = 1 if home_is_underdog else -1
-                    changed.append(col)
-    return X_cf, ", ".join(changed[:8]) if changed else "No matching feature found"
-
-
-def counterfactuals(bundle: ModelBundle, X: pd.DataFrame, probs: np.ndarray) -> list[dict[str, Any]]:
+    probs: np.ndarray,
+    country_features: Mapping[str, Mapping[str, float]],
+) -> list[dict[str, Any]]:
     favorite_idx = int(np.nanargmax(probs))
     home_is_underdog = favorite_idx == 2
+    if favorite_idx == 0:
+        underdog = ctx.away
+    elif favorite_idx == 2:
+        underdog = ctx.home
+    else:
+        underdog = ctx.home if float(X.iloc[0].get("elo_diff", 0.0)) < 0 else ctx.away
     scenarios = [
         ("underdog_elo_plus_100", "Underdog Elo +100"),
         ("h2h_reversed", "Head-to-head record reversed"),
-        ("underdog_home", "Underdog has venue advantage"),
+        ("home_venue_advantage", f"{ctx.home} has venue advantage"),
     ]
     out = []
     for key, label in scenarios:
-        X_cf, changed = apply_counterfactual(X, key, home_is_underdog)
         try:
+            cf_state = copy.deepcopy(bundle.state)
+            neutral = True
+            is_home = False
+            changed = ""
+            if key == "underdog_elo_plus_100":
+                cf_state[underdog]["elo"] += 100
+                changed = f"{underdog} rolling Elo +100; dependent Elo features recomputed"
+            elif key == "h2h_reversed":
+                reverse_h2h_state(cf_state, ctx.home, ctx.away)
+                changed = "H2H wins/losses and goals reversed in rolling state; H2H features recomputed"
+            elif key == "home_venue_advantage":
+                neutral = False
+                is_home = True
+                changed = f"{ctx.home} marked as non-neutral home side; venue features recomputed"
+            frame = build_match_features_from_state(
+                ctx,
+                bundle,
+                country_features,
+                ctx.match_date,
+                state=cf_state,
+                neutral=neutral,
+                is_home=is_home,
+            )
+            X_cf = prepare_X(frame, bundle.feature_names)
             cf_probs = predict_probabilities(bundle, X_cf)
-        except Exception:
+        except Exception as exc:
             cf_probs = np.array([np.nan, np.nan, np.nan])
+            changed = f"Counterfactual unavailable: {exc}"
         out.append({"label": label, "changed": changed, "probs": cf_probs})
     return out
 
@@ -1162,7 +1163,11 @@ def causal_insights(root: Path) -> list[str]:
             if any(k in line.lower() for k in ("host", "did", "world cup experience", "lowco", "causal", "importance", "predictor"))
         ]
         if lines:
-            snippets.append(f"`{path}`: " + " ".join(lines[:3])[:500])
+            try:
+                display_path = path.relative_to(root)
+            except ValueError:
+                display_path = path
+            snippets.append(f"`{display_path}`: " + " ".join(lines[:3])[:500])
     if snippets:
         return snippets
     return [
@@ -1183,21 +1188,22 @@ def report_lines(
     force_path: Path | None,
     bundle: ModelBundle,
     X: pd.DataFrame,
+    country_features: Mapping[str, Mapping[str, float]],
 ) -> list[str]:
     cols = infer_match_columns(ctx.matches)
-    home_df = team_matches(ctx.matches, cols, ctx.home)
-    away_df = team_matches(ctx.matches, cols, ctx.away)
+    home_df = team_matches(ctx.matches, cols, ctx.home, ctx.match_date)
+    away_df = team_matches(ctx.matches, cols, ctx.away, ctx.match_date)
     home_form = recent_form(home_df, cols, ctx.home)
     away_form = recent_form(away_df, cols, ctx.away)
-    h2h = h2h_record(ctx.matches, cols, ctx.home, ctx.away)
+    h2h = h2h_record(ctx.matches, cols, ctx.home, ctx.away, ctx.match_date)
     elo_probs, elo_msg = elo_baseline(X, ctx.home, ctx.away)
     conf = confidence_summary(probs)
-    cfs = counterfactuals(bundle, X, probs)
+    cfs = counterfactuals(ctx, bundle, X, probs, country_features)
     flip = single_feature_flip_search(bundle, X, probs, shap_rows)
     lines: list[str] = []
     lines.append(f"# Match Explanation: {ctx.home} vs {ctx.away}")
     lines.append("")
-    lines.append(f"Stage code: `{ctx.stage}` | Year: `{ctx.year}`")
+    lines.append(f"Stage code: `{ctx.stage}` | Year: `{ctx.year}` | Match date: `{ctx.match_date.date().isoformat()}`")
     lines.append("")
     lines.append("## Prediction")
     lines.append("")
@@ -1212,6 +1218,10 @@ def report_lines(
     lines.append(f"- Brier/calibration note: {brier_note(bundle)}")
     lines.append("")
     lines.append("## Top SHAP Drivers")
+    lines.append("")
+    lines.append(
+        "SHAP values below are raw multiclass margin contrasts: home-win margin contribution minus away-win margin contribution. Signs show local direction; magnitudes are not probability points."
+    )
     lines.append("")
     if shap_rows:
         lines.append("| Feature | Value | Contribution | Favors | Plain-English meaning |")
@@ -1229,8 +1239,8 @@ def report_lines(
     lines.append("")
     lines.append("## Historical Context")
     lines.append("")
-    append_team_history(lines, ctx.home, home_form, elo_trajectory(home_df, cols, ctx.home), world_cup_history(ctx.matches, cols, ctx.home))
-    append_team_history(lines, ctx.away, away_form, elo_trajectory(away_df, cols, ctx.away), world_cup_history(ctx.matches, cols, ctx.away))
+    append_team_history(lines, ctx.home, home_form, elo_trajectory(home_df, cols, ctx.home), world_cup_history(ctx.home, ctx.year))
+    append_team_history(lines, ctx.away, away_form, elo_trajectory(away_df, cols, ctx.away), world_cup_history(ctx.away, ctx.year))
     lines.append("### Head-To-Head")
     lines.append("")
     lines.append(format_h2h(h2h, ctx.home, ctx.away))
@@ -1254,7 +1264,7 @@ def report_lines(
     lines.append("")
     for cf in cfs:
         lines.append(f"- {cf['label']}: {format_probs(cf['probs'])}. Changed: {cf['changed']}.")
-    lines.append(f"- Single-feature flip search: {flip}")
+    lines.append(f"- Single-feature sensitivity search: {flip}")
     lines.append("")
     lines.append("## Causal And SOTA Context")
     lines.append("")
@@ -1334,6 +1344,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--teams", help='Comma-separated teams, e.g. "Brazil,Japan"')
     parser.add_argument("--stage", type=int, default=0, help="Tournament stage code: 0 group, 1 R16, etc.")
     parser.add_argument("--year", type=int, default=2026, help="Feature year to use for country features.")
+    parser.add_argument("--match-date", default="2026-06-29", help="Match date used for rest-days and historical cutoffs.")
     parser.add_argument("--model-path", help="Optional path to a saved XGBoost/joblib model.")
     parser.add_argument("--matches-data", help="Optional path to match history CSV.")
     parser.add_argument("--output-dir", default="output/explain", help="Directory for plots and Markdown report.")
@@ -1362,6 +1373,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     notes = RuntimeNotes()
     root = Path.cwd()
+    match_date = pd.Timestamp(args.match_date)
     shared = import_optional_module("shared", notes)
     predict_2026 = import_optional_module("predict_2026", notes)
     require_project_functions(shared, notes)
@@ -1376,6 +1388,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         away=away,
         year=args.year,
         stage=args.stage,
+        match_date=match_date,
         root=root,
         output_dir=output_dir,
         notes=notes,
@@ -1383,18 +1396,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         predict_2026=predict_2026,
     )
     ctx.country_history = load_country_history(shared, root, notes)
-    home_country = country_features_for(shared, ctx.country_history, home, args.year, notes)
-    away_country = country_features_for(shared, ctx.country_history, away, args.year, notes)
-    ctx.matches = discover_match_data(root, args.matches_data, notes)
-    match_features = build_match_row(ctx, home_country, away_country)
-    bundle = build_model_bundle(ctx, match_features, args.model_path)
+    ctx.matches = discover_match_data(root, args.matches_data, notes, shared)
+    bundle = build_model_bundle(ctx, args.model_path)
+    country_features = country_feature_map_for_year(shared, ctx.country_history, args.year, notes)
+    if not country_features and bundle.country_features:
+        country_features = bundle.country_features
+    match_features = build_match_features_from_state(ctx, bundle, country_features, match_date)
     X = prepare_X(match_features, bundle.feature_names)
     probs = predict_probabilities(bundle, X)
     shap_values, base_value, _explainer = compute_shap_contrast(bundle, X, notes)
     shap_rows = top_shap_rows(bundle.feature_names, shap_values, X, home, away)
     waterfall_path, force_path = save_shap_plots(ctx, X, shap_values, base_value)
     factors = factor_decomposition(shap_rows, X, home, away)
-    lines = report_lines(ctx, probs, shap_rows, factors, waterfall_path, force_path, bundle, X)
+    lines = report_lines(ctx, probs, shap_rows, factors, waterfall_path, force_path, bundle, X, country_features)
     report = "\n".join(lines) + "\n"
     output_dir.mkdir(parents=True, exist_ok=True)
     report_path = output_dir / f"{slugify(home)}_vs_{slugify(away)}_report.md"

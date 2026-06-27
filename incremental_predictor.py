@@ -26,6 +26,7 @@ from sklearn.metrics import accuracy_score, log_loss, roc_auc_score
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from shared import harmonize_country
 
 
 def ensure_xgboost():
@@ -102,28 +103,6 @@ WC_WINNERS = {
     2022: "Argentina",
 }
 
-NAME_MAP = {
-    "West Germany": "Germany",
-    "East Germany": "East Germany",
-    "German DR": "East Germany",
-    "Soviet Union": "Russia",
-    "USSR": "Russia",
-    "Yugoslavia": "Serbia",
-    "Serbia and Montenegro": "Serbia",
-    "Czechoslovakia": "Czech Republic",
-    "Zaire": "DR Congo",
-    "Burma": "Myanmar",
-    "Ivory Coast": "Cote d'Ivoire",
-    "Côte d'Ivoire": "Cote d'Ivoire",
-    "South Korea": "Korea Republic",
-    "Korea South": "Korea Republic",
-    "North Korea": "Korea DPR",
-    "Korea North": "Korea DPR",
-    "IR Iran": "Iran",
-    "Curacao": "Curaçao",
-    "Curaçao": "Curaçao",
-}
-
 STAGE_TO_INT = {"group": 0, "round_of_16": 1, "quarterfinal": 2, "semifinal": 3, "final": 4}
 INT_TO_STAGE = {v: k for k, v in STAGE_TO_INT.items()}
 
@@ -150,8 +129,7 @@ class H2HState:
 def canonical_team(name: object) -> object:
     if pd.isna(name):
         return name
-    text = str(name).strip()
-    return NAME_MAP.get(text, text)
+    return harmonize_country(name)
 
 
 def canonicalize(df: pd.DataFrame, cols: Iterable[str]) -> pd.DataFrame:
@@ -416,7 +394,19 @@ def assign_wc_stage_map(
 
 def build_country_feature_lookup(country_df: pd.DataFrame) -> Tuple[Dict[Tuple[str, int], Dict[str, float]], List[str]]:
     numeric_cols = [c for c in country_df.columns if pd.api.types.is_numeric_dtype(country_df[c])]
-    excluded = {"wc_year", "won_wc", "runner_up", "semifinalist", "finalist", "top4", "is_winner"}
+    excluded = {
+        "wc_year",
+        "won_wc",
+        "runner_up",
+        "semifinalist",
+        "finalist",
+        "top4",
+        "is_winner",
+        "gdp_per_capita_vs_winner",
+        "population_vs_winner",
+        "total_goals_in_tournament",
+        "avg_goals_per_match",
+    }
     feature_cols = [c for c in numeric_cols if c not in excluded]
 
     lookup: Dict[Tuple[str, int], Dict[str, float]] = {}

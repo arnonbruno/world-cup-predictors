@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from collections import defaultdict
 from itertools import combinations
+from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -25,6 +26,7 @@ NAME_ALIASES = {
     "Serbia and Montenegro": "Serbia",
     "Czechoslovakia": "Czech Republic",
     "Dutch East Indies": "Indonesia",
+    "Dutch Guyana": "Suriname",
     "Republic of Ireland": "Ireland",
     "Burma": "Myanmar",
     "United Arab Republic": "Egypt",
@@ -45,6 +47,9 @@ NAME_ALIASES = {
     "UAE": "United Arab Emirates",
     "Cape Verde Islands": "Cape Verde",
     "Bosnia": "Bosnia and Herzegovina",
+    "Korea South": "Korea Republic",
+    "Korea North": "Korea DPR",
+    "Curacao": "Curaçao",
 }
 
 COUNTRY_FEATURE_COLUMNS = [
@@ -122,6 +127,7 @@ THIRD_SLOT_ALLOWED_GROUPS = {
 THIRD_SLOTS = [3, 9, 13, 15, 17, 19, 25, 29]
 INITIAL_ELO = 1500
 K_FACTOR = 32
+STAGE_TO_INT = {"group": 0, "round_of_16": 1, "quarterfinal": 2, "semifinal": 3, "final": 4}
 
 
 def _third_place_assignment_for_combo(groups: Sequence[str]) -> Dict[str, int]:
@@ -181,7 +187,8 @@ def expected_score(elo_a: float, elo_b: float) -> float:
 
 
 def update_elo(elo_a: float, elo_b: float, score_a: int, score_b: int, neutral: bool = True):
-    ea = expected_score(elo_a, elo_b)
+    home_advantage = 0 if neutral else 50
+    ea = expected_score(elo_a + home_advantage, elo_b)
     sa = 1 if score_a > score_b else (0.5 if score_a == score_b else 0)
     margin = abs(score_a - score_b)
     multiplier = np.log(max(margin, 1) + 1)
@@ -189,6 +196,22 @@ def update_elo(elo_a: float, elo_b: float, score_a: int, score_b: int, neutral: 
         elo_a + K_FACTOR * multiplier * (sa - ea),
         elo_b + K_FACTOR * multiplier * ((1 - sa) - (1 - ea)),
     )
+
+
+def make_team_state() -> Dict[str, object]:
+    """Create the mutable rolling state expected by match feature builders."""
+    return {
+        "elo": INITIAL_ELO,
+        "form": [],
+        "goals_for": [],
+        "goals_against": [],
+        "last_match": None,
+        "h2h": defaultdict(lambda: {"matches": 0, "wins": 0, "draws": 0, "losses": 0, "gf": 0, "ga": 0}),
+        "wc_participations": 0,
+        "wc_titles": 0,
+        "wc_wins": 0,
+        "wc_matches": 0,
+    }
 
 
 def finalize_world_cup_history(state, wc_year: int, participants: Iterable[str]) -> None:
@@ -202,7 +225,7 @@ def finalize_world_cup_history(state, wc_year: int, participants: Iterable[str])
         state[winner]["wc_titles"] += 1
 
 
-def compute_match_features(team, opponent, state, country_features, stage_num, match_date):
+def compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False):
     s, o = state[team], state[opponent]
     form = s["form"][-10:] if s["form"] else [0.5]
     gf5 = s["goals_for"][-5:] or [0]
@@ -228,7 +251,7 @@ def compute_match_features(team, opponent, state, country_features, stage_num, m
         "h2h_avg_goals_against": h["ga"] / hm,
         "wc_participations": s["wc_participations"], "wc_titles": s["wc_titles"],
         "wc_win_rate": s["wc_wins"] / max(s["wc_matches"], 1),
-        "stage": stage_num, "neutral": 1, "is_home": 0,
+        "stage": stage_num, "neutral": int(bool(neutral)), "is_home": int(bool(is_home)),
         "gdp_per_capita": cf.get("gdp_per_capita", np.nan),
         "population": cf.get("population", np.nan),
         "life_expectancy": cf.get("life_expectancy", np.nan),
@@ -283,12 +306,118 @@ def country_features_for_year(
     return features
 
 
-def fit_xgb_with_validation(model, X: pd.DataFrame, y: np.ndarray, label: str = "model"):
-    """Fit an XGBoost classifier with a validation split and print basic metrics."""
-    stratify = y if min(np.bincount(y.astype(int))) >= 2 else None
-    X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=stratify
-    )
+def stage_counts_for_year(year: int, total_matches: int) -> Tuple[int, int, int, int]:
+    """Return counts for group, R16, QF, SF before final/tail handling."""
+    if year == 1930:
+        return (15, 0, 0, 2)
+    if year == 1934:
+        return (0, 9, 4, 2)
+    if year == 1938:
+        return (0, 10, 4, 2)
+    if year == 1950:
+        return (16, 0, 0, 0)
+    if year == 1954:
+        return (18, 0, 4, 2)
+    if year == 1958:
+        return (27, 0, 4, 2)
+    if year in {1962, 1966, 1970}:
+        return (24, 0, 4, 2)
+    if year in {1974, 1978}:
+        return (24, 12, 0, 0)
+    if year == 1982:
+        return (36, 12, 0, 2)
+    if year in {1986, 1990, 1994}:
+        return (36, 8, 4, 2)
+    if total_matches >= 64:
+        return (48, 8, 4, 2)
+    if total_matches >= 52:
+        return (36, 8, 4, 2)
+    if total_matches >= 32:
+        return (24, 0, 4, 2)
+    return (max(total_matches - 3, 0), 0, 0, 2)
+
+
+def select_final_match_index(wc_matches: pd.DataFrame, year: int) -> int:
+    """Select the likely final row within a canonicalized World Cup match frame."""
+    winner = harmonize_country(WC_WINNERS.get(int(year), ""))
+    df = wc_matches.sort_values(["date", "home_team", "away_team"]).reset_index()
+    if df.empty:
+        return -1
+    latest_date = df["date"].max()
+    same_day = df[df["date"] == latest_date]
+    involving_winner = same_day[(same_day["home_team"] == winner) | (same_day["away_team"] == winner)]
+    if not involving_winner.empty:
+        return int(involving_winner.index[0])
+    if int(year) == 1950:
+        end_slice = df.tail(min(6, len(df)))
+        candidates = end_slice[(end_slice["home_team"] == winner) | (end_slice["away_team"] == winner)]
+        if not candidates.empty:
+            return int(candidates.index[-1])
+    return int(df.index[-1])
+
+
+def assign_wc_stage_map(wc_matches: pd.DataFrame, year: int) -> Dict[int, int]:
+    """Assign stage code per original dataframe index using historical WC schedule shapes."""
+    if wc_matches.empty:
+        return {}
+    df = wc_matches.sort_values(["date", "home_team", "away_team"]).reset_index()
+    total = len(df)
+    stage_labels = ["group"] * total
+    group_count, r16_count, qf_count, sf_count = stage_counts_for_year(year, total)
+    idx = 0
+    for label, count in (
+        ("group", group_count),
+        ("round_of_16", r16_count),
+        ("quarterfinal", qf_count),
+        ("semifinal", sf_count),
+    ):
+        for _ in range(count):
+            if idx < total:
+                stage_labels[idx] = label
+                idx += 1
+    while idx < total:
+        stage_labels[idx] = "semifinal"
+        idx += 1
+    final_idx = select_final_match_index(wc_matches, year)
+    if 0 <= final_idx < total:
+        stage_labels[final_idx] = "final"
+    return {int(df.iloc[i]["index"]): STAGE_TO_INT[stage_labels[i]] for i in range(total)}
+
+
+def infer_world_cup_stage_map(results_df: pd.DataFrame) -> Dict[int, int]:
+    """Infer historical World Cup stage labels for rows in a results dataframe."""
+    if results_df.empty or "tournament" not in results_df.columns or "date" not in results_df.columns:
+        return {}
+    df = harmonize_columns(results_df.copy(), ["home_team", "away_team"])
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    wc = df[df["tournament"].astype(str).eq("FIFA World Cup")].copy()
+    if wc.empty:
+        return {}
+    stage_by_index: Dict[int, int] = {}
+    for year, part in wc.groupby(wc["date"].dt.year):
+        if pd.isna(year):
+            continue
+        stage_by_index.update(assign_wc_stage_map(part, int(year)))
+    return stage_by_index
+
+
+def fit_xgb_with_validation(model, X: pd.DataFrame, y: np.ndarray, label: str = "model", dates: Sequence | None = None):
+    """Fit an XGBoost classifier and report a chronological holdout when dates are available."""
+    if dates is not None and len(dates) == len(X):
+        order = pd.Series(pd.to_datetime(dates, errors="coerce")).sort_values().index
+        split = max(1, int(len(order) * 0.8))
+        if split >= len(order):
+            split = len(order) - 1
+        train_idx, val_idx = order[:split], order[split:]
+        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
+        y_train, y_val = y[train_idx], y[val_idx]
+        split_label = "chronological holdout"
+    else:
+        stratify = y if min(np.bincount(y.astype(int))) >= 2 else None
+        X_train, X_val, y_train, y_val = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=stratify
+        )
+        split_label = "random holdout"
     fit_kwargs = {"eval_set": [(X_val, y_val)], "verbose": False}
     try:
         model.fit(X_train, y_train, early_stopping_rounds=30, **fit_kwargs)
@@ -304,8 +433,8 @@ def fit_xgb_with_validation(model, X: pd.DataFrame, y: np.ndarray, label: str = 
     labels = sorted(np.unique(y).astype(int).tolist())
     acc = accuracy_score(y_val, val_pred)
     loss = log_loss(y_val, val_probs, labels=labels)
-    print(f"  {label} holdout accuracy={acc:.3f}, log-loss={loss:.3f} ({len(X_val)} matches)")
-    return model, {"accuracy": float(acc), "log_loss": float(loss), "n_val": int(len(X_val))}
+    print(f"  {label} {split_label} accuracy={acc:.3f}, log-loss={loss:.3f} ({len(X_val)} matches)")
+    return model, {"accuracy": float(acc), "log_loss": float(loss), "n_val": int(len(X_val)), "split": split_label}
 
 
 def empty_group_table() -> Dict[str, Dict[str, int]]:

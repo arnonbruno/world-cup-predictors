@@ -26,7 +26,7 @@ from sklearn.metrics import accuracy_score, log_loss, roc_auc_score
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
 
-from shared import parse_bool
+from shared import harmonize_country, parse_bool
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -70,25 +70,6 @@ WORLD_CUP_WINNERS = {
     2022: "Argentina",
 }
 
-NAME_ALIASES = {
-    "West Germany": "Germany",
-    "German DR": "East Germany",
-    "East Germany": "East Germany",
-    "Soviet Union": "Russia",
-    "USSR": "Russia",
-    "Yugoslavia": "Serbia",
-    "Serbia and Montenegro": "Serbia",
-    "Czechoslovakia": "Czech Republic",
-    "Zaire": "DR Congo",
-    "Dutch Guyana": "Suriname",
-    "Burma": "Myanmar",
-    "Curaçao": "Curacao",
-    "Vietnam Republic": "Vietnam",
-    "United Arab Republic": "Egypt",
-    "IR Iran": "Iran",
-}
-
-
 @dataclass
 class TeamState:
     """Rolling team state used for leakage-safe features."""
@@ -107,7 +88,7 @@ class TeamState:
 def canonicalize_team(name: str) -> str:
     if pd.isna(name):
         return name
-    return NAME_ALIASES.get(str(name), str(name))
+    return harmonize_country(name)
 
 
 def canonicalize_columns(df: pd.DataFrame, cols: Iterable[str]) -> pd.DataFrame:

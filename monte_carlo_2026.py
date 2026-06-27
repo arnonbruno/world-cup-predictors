@@ -28,14 +28,6 @@ warnings.filterwarnings('ignore')
 N_SIMS = 1000
 np.random.seed(42)
 
-# ── Constants ──
-NAME_MAP = {
-    'West Germany': 'Germany', 'Soviet Union': 'Russia', 'USSR': 'Russia',
-    'Yugoslavia': 'Serbia', 'Czechoslovakia': 'Czech Republic',
-    'Zaire': 'DR Congo', 'Ivory Coast': "Côte d'Ivoire",
-    'South Korea': 'Korea Republic', 'North Korea': 'Korea DPR',
-    'Iran': 'IR Iran', 'United States': 'USA',
-}
 INITIAL_ELO = 1500
 K_FACTOR = 32
 
@@ -46,7 +38,8 @@ def expected_score(elo_a, elo_b):
     return 1 / (1 + 10 ** ((elo_b - elo_a) / 400))
 
 def update_elo(elo_a, elo_b, score_a, score_b, neutral=True):
-    ea = expected_score(elo_a, elo_b)
+    home_advantage = 0 if neutral else 50
+    ea = expected_score(elo_a + home_advantage, elo_b)
     sa = 1 if score_a > score_b else (0.5 if score_a == score_b else 0)
     margin = abs(score_a - score_b)
     multiplier = np.log(max(margin, 1) + 1)
@@ -435,7 +428,7 @@ def main():
         for team, count in d.items():
             top4[team] += count
     for team, count in top4.most_common(15):
-        pct = count / (N_SIMS * 4) * 100
+        pct = count / N_SIMS * 100
         print(f"  {team:25s} {count:5d} ({pct:5.1f}%)")
 
     # Runner-up distribution

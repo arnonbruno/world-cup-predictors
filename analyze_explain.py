@@ -28,14 +28,6 @@ from shared import (
 )
 warnings.filterwarnings('ignore')
 
-# ── Same setup as monte_carlo_2026.py ──
-NAME_MAP = {
-    'West Germany': 'Germany', 'Soviet Union': 'Russia', 'USSR': 'Russia',
-    'Yugoslavia': 'Serbia', 'Czechoslovakia': 'Czech Republic',
-    'Zaire': 'DR Congo', 'Ivory Coast': "Côte d'Ivoire",
-    'South Korea': 'Korea Republic', 'North Korea': 'Korea DPR',
-    'Iran': 'IR Iran', 'United States': 'USA',
-}
 INITIAL_ELO = 1500
 K_FACTOR = 32
 

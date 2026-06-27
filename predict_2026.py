@@ -6,7 +6,9 @@ Uses correct Wikipedia standings + proper FIFA bracket.
 import pandas as pd
 import numpy as np
 import xgboost as xgb
+from dataclasses import dataclass
 from collections import defaultdict
+from typing import Any
 import warnings
 from shared import (
     GROUP_2026_TEAMS,
@@ -18,57 +20,48 @@ from shared import (
     fit_xgb_with_validation,
     finalize_world_cup_history,
     harmonize_country,
+    infer_world_cup_stage_map,
     load_country_feature_history,
+    make_team_state,
+    parse_bool,
     rank_third_place_teams,
     sorted_group_standings,
+    update_elo,
 )
 warnings.filterwarnings('ignore')
-
-NAME_MAP = {
-    'West Germany': 'Germany', 'Soviet Union': 'Russia', 'USSR': 'Russia',
-    'Yugoslavia': 'Serbia', 'Czechoslovakia': 'Czech Republic',
-    'Zaire': 'DR Congo', 'Ivory Coast': "Côte d'Ivoire",
-    'South Korea': 'Korea Republic', 'North Korea': 'Korea DPR',
-    'Iran': 'IR Iran', 'United States': 'USA',
-}
 
 def harmonize(name):
     return harmonize_country(name)
 
-INITIAL_ELO = 1500
-K_FACTOR = 32
 
-def expected_score(elo_a, elo_b):
-    return 1 / (1 + 10 ** ((elo_b - elo_a) / 400))
+@dataclass
+class PredictionBundle:
+    model: Any
+    state: Any
+    feature_names: list[str]
+    train_X: pd.DataFrame
+    train_y: np.ndarray
+    country_history: dict
+    country_features: dict
 
-def update_elo(elo_a, elo_b, score_a, score_b, neutral=True):
-    ea = expected_score(elo_a, elo_b)
-    sa = 1 if score_a > score_b else (0.5 if score_a == score_b else 0)
-    margin = abs(score_a - score_b)
-    multiplier = np.log(max(margin, 1) + 1)
-    return (elo_a + K_FACTOR * multiplier * (sa - ea),
-            elo_b + K_FACTOR * multiplier * ((1 - sa) - (1 - ea)))
 
-def compute_features(team, opponent, state, country_features, stage_num, match_date):
-    return compute_match_features(team, opponent, state, country_features, stage_num, match_date)
+def compute_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=True):
+    return compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral, is_home)
 
-def train_model(results_df, country_history):
+def train_model_bundle(results_df, country_history, exclude_2026_wc=True):
     df = results_df.copy()
     df['date'] = pd.to_datetime(df['date'])
-    df = df[~((df['date'].dt.year == 2026) & (df['tournament'] == 'FIFA World Cup'))]
+    if exclude_2026_wc:
+        df = df[~((df['date'].dt.year == 2026) & (df['tournament'] == 'FIFA World Cup'))]
     df = df.sort_values('date').reset_index(drop=True)
     
-    state = defaultdict(lambda: {
-        'elo': INITIAL_ELO, 'form': [], 'goals_for': [], 'goals_against': [],
-        'last_match': None,
-        'h2h': defaultdict(lambda: {'matches': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'gf': 0, 'ga': 0}),
-        'wc_participations': 0, 'wc_titles': 0, 'wc_wins': 0, 'wc_matches': 0
-    })
+    state = defaultdict(make_team_state)
     
-    rows, labels = [], []
+    rows, labels, feature_dates = [], [], []
     country_feature_cache = {}
     active_wc_year = None
     active_wc_teams = set()
+    wc_stage_by_index = infer_world_cup_stage_map(df)
     for _, r in df.iterrows():
         ht, at = harmonize(r['home_team']), harmonize(r['away_team'])
         hs, aw = r['home_score'], r['away_score']
@@ -83,10 +76,13 @@ def train_model(results_df, country_history):
 
         if feature_year not in country_feature_cache:
             country_feature_cache[feature_year] = country_features_for_year(country_history, feature_year)
-        rows.append(compute_features(ht, at, state, country_feature_cache[feature_year], 0, r['date']))
+        stage = wc_stage_by_index.get(int(r.name), 0) if is_world_cup else 0
+        neutral = parse_bool(r.get('neutral', True))
+        rows.append(compute_features(ht, at, state, country_feature_cache[feature_year], stage, r['date'], neutral, not neutral))
         labels.append(0 if hs > aw else (1 if hs == aw else 2))
+        feature_dates.append(r['date'])
         
-        state[ht]['elo'], state[at]['elo'] = update_elo(state[ht]['elo'], state[at]['elo'], hs, aw)
+        state[ht]['elo'], state[at]['elo'] = update_elo(state[ht]['elo'], state[at]['elo'], hs, aw, neutral)
         for t, gf, ga, result in [(ht, hs, aw, 'W' if hs>aw else ('D' if hs==aw else 'L')),
                                    (at, aw, hs, 'W' if aw>hs else ('D' if hs==aw else 'L'))]:
             state[t]['form'].append(1 if result=='W' else (0.5 if result=='D' else 0))
@@ -129,16 +125,40 @@ def train_model(results_df, country_history):
                                subsample=0.8, colsample_bytree=0.8,
                                objective='multi:softprob', num_class=3,
                                eval_metric='mlogloss', random_state=42, verbosity=0)
-    model, _metrics = fit_xgb_with_validation(model, X, y, label="XGBoost")
+    model, _metrics = fit_xgb_with_validation(model, X, y, label="XGBoost", dates=feature_dates)
     print(f"  Trained on {len(X)} matches")
-    return model, state, X.columns.tolist()
+    return PredictionBundle(
+        model=model,
+        state=state,
+        feature_names=X.columns.tolist(),
+        train_X=X,
+        train_y=y,
+        country_history=country_history,
+        country_features=country_features_for_year(country_history, 2022),
+    )
+
+def train_model(results_df, country_history):
+    bundle = train_model_bundle(results_df, country_history)
+    return bundle.model, bundle.state, bundle.feature_names, bundle.train_X, bundle.train_y
+
+def prepare_2026_state(results, state):
+    wc26 = results[(results['tournament'] == 'FIFA World Cup') &
+                   (pd.to_datetime(results['date']).dt.year == 2026)].copy()
+    wc26['date'] = pd.to_datetime(wc26['date'])
+    completed = wc26[wc26['home_score'].notna() & wc26['away_score'].notna()].sort_values('date')
+    for _, r in completed.iterrows():
+        update_state(state, r['home_team'], r['away_team'], int(r['home_score']), int(r['away_score']), r['date'])
+    for teams in GROUP_2026_TEAMS.values():
+        for team in teams:
+            state[harmonize(team)]['wc_participations'] += 1
+    return state
 
 def load_country_features():
     return country_features_for_year(load_country_feature_history(), 2022)
 
 def update_state(state, ta, tb, sa, sb, date):
     ha, hb = harmonize(ta), harmonize(tb)
-    state[ha]['elo'], state[hb]['elo'] = update_elo(state[ha]['elo'], state[hb]['elo'], sa, sb)
+    state[ha]['elo'], state[hb]['elo'] = update_elo(state[ha]['elo'], state[hb]['elo'], sa, sb, True)
     for t, gf, ga in [(ha, sa, sb), (hb, sb, sa)]:
         state[t]['form'].append(1 if gf > ga else (0.5 if gf == ga else 0))
         state[t]['form'] = state[t]['form'][-20:]
@@ -167,7 +187,7 @@ def update_state(state, ta, tb, sa, sb, date):
 
 def predict(model, fl, ta, tb, state, cf, stage, date):
     ha, hb = harmonize(ta), harmonize(tb)
-    feat = compute_features(ha, hb, state, cf, stage, date)
+    feat = compute_features(ha, hb, state, cf, stage, date, True, False)
     X = pd.DataFrame([feat])[fl].fillna(0)
     probs = model.predict_proba(X)[0]
     pa, pd_, pb = probs[0], probs[1], probs[2]
@@ -204,16 +224,13 @@ def main():
     print(f"  {len(results)} matches, {len(cf)} countries with features")
     
     print("[2/4] Training model...")
-    model, state, fl = train_model(results, country_history)
+    model, state, fl, _train_X, _train_y = train_model(results, country_history)
     
     print("[3/4] Processing completed 2026 WC matches...")
-    wc26 = results[(results['tournament'] == 'FIFA World Cup') & 
-                    (pd.to_datetime(results['date']).dt.year == 2026)].copy()
-    wc26['date'] = pd.to_datetime(wc26['date'])
-    completed = wc26[wc26['home_score'].notna()].sort_values('date')
-    for _, r in completed.iterrows():
-        update_state(state, r['home_team'], r['away_team'], int(r['home_score']), int(r['away_score']), r['date'])
-    print(f"  Processed {len(completed)} completed matches")
+    before_matches = sum(state[t]['wc_matches'] for t in state)
+    prepare_2026_state(results, state)
+    after_matches = sum(state[t]['wc_matches'] for t in state)
+    print(f"  Processed {(after_matches - before_matches) // 2} completed matches")
     
     groups, remaining = build_2026_group_state(results)
 
@@ -221,9 +238,7 @@ def main():
     all_teams = set()
     for teams in GROUP_2026_TEAMS.values():
         for t in teams:
-            ht = harmonize(t)
-            all_teams.add(ht)
-            state[ht]['wc_participations'] += 1
+            all_teams.add(harmonize(t))
     
     print("[4/4] Simulating remaining matches...\n")
     
