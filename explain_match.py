@@ -558,6 +558,17 @@ def prepare_X(frame: pd.DataFrame, feature_names: Sequence[str] | None = None) -
     return frame.fillna(0.0)
 
 
+def renormalize_knockout(probs: np.ndarray) -> np.ndarray:
+    """Remove draw probability and renormalize for knockout matches."""
+    if len(probs) < 3:
+        return probs
+    home, away = probs[0], probs[2]
+    total = home + away
+    if total > 0:
+        return np.array([home / total, 0.0, away / total])
+    return np.array([0.5, 0.0, 0.5])
+
+
 def train_model_with_shared(
     shared: Any | None,
     matches: pd.DataFrame | None,
@@ -1094,6 +1105,8 @@ def counterfactuals(
             )
             X_cf = prepare_X(frame, bundle.feature_names)
             cf_probs = predict_probabilities(bundle, X_cf)
+            if ctx.stage > 0:
+                cf_probs = renormalize_knockout(cf_probs)
         except Exception as exc:
             cf_probs = np.array([np.nan, np.nan, np.nan])
             changed = f"Counterfactual unavailable: {exc}"
@@ -1197,6 +1210,8 @@ def report_lines(
     away_form = recent_form(away_df, cols, ctx.away)
     h2h = h2h_record(ctx.matches, cols, ctx.home, ctx.away, ctx.match_date)
     elo_probs, elo_msg = elo_baseline(X, ctx.home, ctx.away)
+    if ctx.stage > 0 and elo_probs is not None:
+        elo_probs = renormalize_knockout(elo_probs)
     conf = confidence_summary(probs)
     cfs = counterfactuals(ctx, bundle, X, probs, country_features)
     flip = single_feature_flip_search(bundle, X, probs, shap_rows)
@@ -1208,6 +1223,8 @@ def report_lines(
     lines.append("## Prediction")
     lines.append("")
     lines.append(f"- Model probabilities: **{format_probs(probs)}**")
+    if ctx.stage > 0:
+        lines.append(f"- *Knockout stage: draw excluded, probabilities renormalized to P(home|no draw) and P(away|no draw)*")
     lines.append(f"- Most likely outcome: **{OUTCOME_LABELS[int(np.nanargmax(probs))]}**")
     lines.append(f"- Confidence: **{fmt_pct(conf['confidence'])}**; top-two margin: **{fmt_pct(conf['margin'])}**; entropy: **{fmt_num(conf['entropy'])}**")
     if elo_probs is not None:
@@ -1404,6 +1421,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     match_features = build_match_features_from_state(ctx, bundle, country_features, match_date)
     X = prepare_X(match_features, bundle.feature_names)
     probs = predict_probabilities(bundle, X)
+    is_knockout = ctx.stage > 0
+    if is_knockout:
+        probs = renormalize_knockout(probs)
     shap_values, base_value, _explainer = compute_shap_contrast(bundle, X, notes)
     shap_rows = top_shap_rows(bundle.feature_names, shap_values, X, home, away)
     waterfall_path, force_path = save_shap_plots(ctx, X, shap_values, base_value)

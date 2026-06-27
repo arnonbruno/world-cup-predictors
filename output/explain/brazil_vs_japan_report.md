@@ -4,11 +4,12 @@ Stage code: `1` | Year: `2026` | Match date: `2026-06-29`
 
 ## Prediction
 
-- Model probabilities: **Home 19.8%, Draw 68.9%, Away 11.4%**
-- Most likely outcome: **Draw**
-- Confidence: **68.9%**; top-two margin: **49.1%**; entropy: **0.751**
-- Elo-only baseline: **Home 48.4%, Draw 23.8%, Away 27.8%** (Elo difference: Brazil minus Japan = 97.)
-- Similar-confidence history: Among 7539 training cases with similar confidence, the top prediction was correct 70.9% of the time.
+- Model probabilities: **Home 63.4%, Draw 0.0%, Away 36.6%**
+- *Knockout stage: draw excluded, probabilities renormalized to P(home|no draw) and P(away|no draw)*
+- Most likely outcome: **Home win**
+- Confidence: **63.4%**; top-two margin: **26.9%**; entropy: **0.598**
+- Elo-only baseline: **Home 63.6%, Draw 0.0%, Away 36.4%** (Elo difference: Brazil minus Japan = 97.)
+- Similar-confidence history: Among 8359 training cases with similar confidence, the top prediction was correct 65.2% of the time.
 - Brier/calibration note: Multiclass Brier score on available training data: 0.5004. Full reliability/resolution decomposition needs held-out bins.
 
 ## Top SHAP Drivers
@@ -96,10 +97,10 @@ Force plot: `/var/mnt/DATA/Hermes/workspace/world-cup-predictors/output/explain/
 
 ## Counterfactuals
 
-- Underdog Elo +100: Home 22.0%, Draw 62.2%, Away 15.8%. Changed: Japan rolling Elo +100; dependent Elo features recomputed.
-- Head-to-head record reversed: Home 19.1%, Draw 63.6%, Away 17.4%. Changed: H2H wins/losses and goals reversed in rolling state; H2H features recomputed.
-- Brazil has venue advantage: Home 22.3%, Draw 67.9%, Away 9.7%. Changed: Brazil marked as non-neutral home side; venue features recomputed.
-- Single-feature sensitivity search: Changing `elo_diff` to -120 moves the opposing win probability by 4.5%; new probabilities are Home 24.3%, Draw 51.1%, Away 24.6%.
+- Underdog Elo +100: Home 58.2%, Draw 0.0%, Away 41.8%. Changed: Japan rolling Elo +100; dependent Elo features recomputed.
+- Head-to-head record reversed: Home 52.3%, Draw 0.0%, Away 47.7%. Changed: H2H wins/losses and goals reversed in rolling state; H2H features recomputed.
+- Brazil has venue advantage: Home 69.7%, Draw 0.0%, Away 30.3%. Changed: Brazil marked as non-neutral home side; venue features recomputed.
+- Single-feature sensitivity search: Changing `elo_diff` to -120 moves the opposing win probability by -11.9%; new probabilities are Home 24.3%, Draw 51.1%, Away 24.6%.
 
 ## Causal And SOTA Context
 

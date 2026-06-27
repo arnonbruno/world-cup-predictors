@@ -191,8 +191,19 @@ def predict(model, fl, ta, tb, state, cf, stage, date):
     X = pd.DataFrame([feat])[fl].fillna(0)
     probs = model.predict_proba(X)[0]
     pa, pd_, pb = probs[0], probs[1], probs[2]
+    # Group stage: allow draw if it's the most likely outcome
     if stage == 0 and pd_ >= pa and pd_ >= pb:
         return None, pd_, pa, pd_, pb
+    # Knockout stages: no draw possible, renormalize to P(home|no draw), P(away|no draw)
+    if stage > 0:
+        total = pa + pb
+        if total > 0:
+            pa_cond = pa / total
+            pb_cond = pb / total
+        else:
+            pa_cond, pb_cond = 0.5, 0.5
+        winner = ta if pa_cond >= pb_cond else tb
+        return winner, max(pa_cond, pb_cond), pa_cond, pd_, pb_cond
     winner = ta if pa >= pb else tb
     return winner, max(pa, pb), pa, pd_, pb
 
@@ -209,7 +220,10 @@ def simulate_round(matches, name, stage, state, model, fl, cf, date):
         else:
             update_state(state, ta, tb, 1, 2, date)
         print(f"  {label}: {ta} vs {tb}")
-        print(f"    → ✅ {winner} ({prob:.1%})  [P({ta})={pa:.1%} P(draw)={pd_:.1%} P({tb})={pb:.1%}]")
+        if stage > 0:
+            print(f"    → ✅ {winner} ({prob:.1%})  [P({ta})={pa:.1%} P({tb})={pb:.1%}] (knockout: no draw)")
+        else:
+            print(f"    → ✅ {winner} ({prob:.1%})  [P({ta})={pa:.1%} P(draw)={pd_:.1%} P({tb})={pb:.1%}]")
     return winners
 
 def main():
