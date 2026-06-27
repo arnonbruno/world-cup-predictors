@@ -76,6 +76,22 @@ ODDS_FEATURE_COLUMNS = [
     "odds_overround",
 ]
 
+# Transfermarkt squad market-value features. Values span ~1M to ~1.8B EUR, so
+# every level/diff is log-scaled (log1p) before it reaches the model. A team/year
+# with no Transfermarkt coverage yields NaN for every column; XGBoost handles the
+# missing split natively, so no imputation is performed for these columns.
+SQUAD_VALUE_FEATURE_COLUMNS = [
+    "squad_value",
+    "opp_squad_value",
+    "squad_value_diff",
+    "squad_value_ratio",
+]
+
+# World Cup editions for which Transfermarkt squad values are available. Lookups
+# use the most recent edition at or before the match year (a "year lag"), so a
+# 2023 friendly is valued with the 2022 squad and a 2026 fixture with 2026 values.
+SQUAD_VALUE_YEARS = (2014, 2018, 2022, 2026)
+
 GROUP_2026_TEAMS = {
     "A": ["Mexico", "South Africa", "Korea Republic", "Czech Republic"],
     "B": ["Canada", "Bosnia and Herzegovina", "Qatar", "Switzerland"],
@@ -392,7 +408,7 @@ def _matches_in_window(state_entry, match_date, days: int) -> int:
     return count
 
 
-def compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False, odds_row=None):
+def compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False, odds_row=None, squad_values=None):
     s, o = state[team], state[opponent]
     form = s["form"][-10:] if s["form"] else [0.5]
     opp_form = o["form"][-10:] if o["form"] else [0.5]
@@ -450,6 +466,22 @@ def compute_match_features(team, opponent, state, country_features, stage_num, m
     if odds_row is None:
         odds_row = {col: np.nan for col in ODDS_FEATURE_COLUMNS}
 
+    # 7. Transfermarkt squad market values (log-scaled). Uses the most recent WC
+    #    edition's values at or before the match year. Missing teams/years stay
+    #    NaN so XGBoost can learn a dedicated "no valuation" split rather than
+    #    treating an absent value as 0 EUR.
+    home_val = squad_value_for_team(squad_values, team, match_date)["total_squad_value_eur"]
+    away_val = squad_value_for_team(squad_values, opponent, match_date)["total_squad_value_eur"]
+    squad_value = np.log1p(home_val) if np.isfinite(home_val) else np.nan
+    opp_squad_value = np.log1p(away_val) if np.isfinite(away_val) else np.nan
+    if np.isfinite(home_val) and np.isfinite(away_val):
+        squad_value_diff = np.log1p(home_val) - np.log1p(away_val)
+        # Ratio of raw values (home / away); +1 guards against a zero-value squad.
+        squad_value_ratio = (home_val + 1.0) / (away_val + 1.0)
+    else:
+        squad_value_diff = np.nan
+        squad_value_ratio = np.nan
+
     return {
         "elo": s["elo"], "elo_opponent": o["elo"],
         "elo_diff": elo_diff, "elo_sum": s["elo"] + o["elo"],
@@ -500,39 +532,47 @@ def compute_match_features(team, opponent, state, country_features, stage_num, m
         "implied_draw_prob": odds_row.get("implied_draw_prob", np.nan),
         "implied_away_prob": odds_row.get("implied_away_prob", np.nan),
         "odds_overround": odds_row.get("odds_overround", np.nan),
+        # ── Transfermarkt squad market values (log-scaled; NaN when unavailable) ──
+        "squad_value": squad_value,
+        "opp_squad_value": opp_squad_value,
+        "squad_value_diff": squad_value_diff,
+        "squad_value_ratio": squad_value_ratio,
     }
 
 
 def finalize_feature_frame(rows: Sequence[dict]) -> pd.DataFrame:
     """Turn feature dicts into a model-ready frame.
 
-    Non-odds columns are filled with 0 (the historical behaviour), but the
-    bookmaker-odds columns are *deliberately left as NaN* when missing so that
-    XGBoost can learn a dedicated "missing odds" split instead of treating an
-    absent market as a 0% implied probability. ``predict_proba`` at inference
-    time must use the same convention (see ``prepare_prediction_frame``).
+    Most columns are filled with 0 (the historical behaviour), but the
+    bookmaker-odds and squad-value columns are *deliberately left as NaN* when
+    missing so that XGBoost can learn dedicated "missing odds" / "no valuation"
+    splits instead of treating an absent market as a 0% implied probability or an
+    unvalued squad as 0 EUR. ``predict_proba`` at inference time must use the same
+    convention (see ``prepare_prediction_frame``).
     """
     X = pd.DataFrame(rows)
-    non_odds = [c for c in X.columns if c not in ODDS_FEATURE_COLUMNS]
-    if non_odds:
-        X[non_odds] = X[non_odds].fillna(0)
+    keep_nan = set(ODDS_FEATURE_COLUMNS) | set(SQUAD_VALUE_FEATURE_COLUMNS)
+    non_nan = [c for c in X.columns if c not in keep_nan]
+    if non_nan:
+        X[non_nan] = X[non_nan].fillna(0)
     return X
 
 
 def prepare_prediction_frame(feat: dict, feature_names: Sequence[str]) -> pd.DataFrame:
     """Build a single-row frame aligned to ``feature_names`` for prediction.
 
-    Mirrors :func:`finalize_feature_frame`: odds columns keep their NaN so the
-    model sees the same missing-value encoding it was trained on.
+    Mirrors :func:`finalize_feature_frame`: odds and squad-value columns keep
+    their NaN so the model sees the same missing-value encoding it was trained on.
     """
     X = pd.DataFrame([feat])
     for name in feature_names:
         if name not in X.columns:
             X[name] = np.nan
     X = X[list(feature_names)]
-    non_odds = [c for c in X.columns if c not in ODDS_FEATURE_COLUMNS]
-    if non_odds:
-        X[non_odds] = X[non_odds].fillna(0)
+    keep_nan = set(ODDS_FEATURE_COLUMNS) | set(SQUAD_VALUE_FEATURE_COLUMNS)
+    non_nan = [c for c in X.columns if c not in keep_nan]
+    if non_nan:
+        X[non_nan] = X[non_nan].fillna(0)
     return X
 
 
@@ -626,6 +666,90 @@ def odds_features_for_match(
     if not odds:
         return nan_row
     return dict(odds.get(_odds_key(date, home, away), nan_row))
+
+
+def load_squad_values(
+    path: Path = DATA_DIR / "squad_values.csv",
+) -> Dict[Tuple[str, int], Dict[str, float]]:
+    """Load Transfermarkt squad values keyed by (canonical_team, year).
+
+    The CSV uses the same raw team spellings as ``results.csv`` (e.g. "Iran",
+    "South Korea", "Ivory Coast"), so each team is harmonized through
+    :data:`NAME_ALIASES` on load to match the canonical names used in the rolling
+    state dict ("IR Iran", "Korea Republic", "Cote d'Ivoire" -> "Côte d'Ivoire").
+
+    Returns a mapping ``(team, year) -> {total_squad_value_eur,
+    avg_player_value_eur}``. Missing/unparseable files yield an empty mapping so
+    callers degrade gracefully to all-NaN squad-value features.
+    """
+    values: Dict[Tuple[str, int], Dict[str, float]] = {}
+    if not Path(path).exists():
+        return values
+    try:
+        df = pd.read_csv(path)
+    except Exception:
+        return values
+
+    required = {"team", "year", "total_squad_value_eur", "avg_player_value_eur"}
+    if not required.issubset(df.columns):
+        return values
+
+    for _, row in df.iterrows():
+        try:
+            year = int(row["year"])
+        except (TypeError, ValueError):
+            continue
+        team = harmonize_country(row["team"])
+        if pd.isna(team):
+            continue
+
+        def _num(col: str) -> float:
+            try:
+                v = float(row[col])
+            except (TypeError, ValueError):
+                return np.nan
+            return v if np.isfinite(v) else np.nan
+
+        values[(str(team), year)] = {
+            "total_squad_value_eur": _num("total_squad_value_eur"),
+            "avg_player_value_eur": _num("avg_player_value_eur"),
+        }
+    return values
+
+
+def _squad_value_year(match_year: int) -> Optional[int]:
+    """Most recent World Cup edition with squad values at or before ``match_year``.
+
+    Implements the documented year lag: matches in 2023 look up 2022 squads, 2026
+    fixtures look up 2026 values, etc. Returns ``None`` when the match predates the
+    earliest available edition.
+    """
+    usable = [y for y in SQUAD_VALUE_YEARS if y <= match_year]
+    return max(usable) if usable else None
+
+
+def squad_value_for_team(
+    squad_values: Optional[Dict[Tuple[str, int], Dict[str, float]]],
+    team: str,
+    match_date,
+) -> Dict[str, float]:
+    """Return the squad-value entry for ``team`` at the lagged WC year, or NaNs.
+
+    ``team`` must already be the canonical (harmonized) name. ``match_date`` may be
+    anything ``pd.to_datetime`` understands; its calendar year drives the year-lag
+    lookup via :func:`_squad_value_year`.
+    """
+    nan_entry = {"total_squad_value_eur": np.nan, "avg_player_value_eur": np.nan}
+    if not squad_values:
+        return dict(nan_entry)
+    try:
+        match_year = int(pd.to_datetime(match_date).year)
+    except Exception:
+        return dict(nan_entry)
+    lookup_year = _squad_value_year(match_year)
+    if lookup_year is None:
+        return dict(nan_entry)
+    return dict(squad_values.get((harmonize_country(team), lookup_year), nan_entry))
 
 
 def load_country_feature_history(

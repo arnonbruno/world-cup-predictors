@@ -26,6 +26,7 @@ from shared import (
     sample_weights,
     load_betting_odds,
     odds_features_for_match,
+    load_squad_values,
     fit_dixon_coles,
     blend_probabilities,
     harmonize_country,
@@ -58,10 +59,11 @@ class PredictionBundle:
     odds: dict = None
     poisson_model: Any = None
     alpha: float = 1.0
+    squad_values: dict = None
 
 
-def compute_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False, odds_row=None):
-    return compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral, is_home, odds_row)
+def compute_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False, odds_row=None, squad_values=None):
+    return compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral, is_home, odds_row, squad_values)
 
 def _tune_blend_alpha(model, poisson_model, X_val, y_val, val_meta):
     from sklearn.metrics import log_loss as _ll
@@ -79,9 +81,11 @@ def _tune_blend_alpha(model, poisson_model, X_val, y_val, val_meta):
     return float(best_alpha)
 
 
-def train_model_bundle(results_df, country_history, exclude_2026_wc=True, odds=None):
+def train_model_bundle(results_df, country_history, exclude_2026_wc=True, odds=None, squad_values=None):
     if odds is None:
         odds = load_betting_odds()
+    if squad_values is None:
+        squad_values = load_squad_values()
     df = results_df.copy()
     df['date'] = pd.to_datetime(df['date'])
     if exclude_2026_wc:
@@ -112,7 +116,7 @@ def train_model_bundle(results_df, country_history, exclude_2026_wc=True, odds=N
         stage = wc_stage_by_index.get(int(r.name), 0) if is_world_cup else 0
         neutral = parse_bool(r.get('neutral', True))
         odds_row = odds_features_for_match(odds, r['date'], ht, at)
-        rows.append(compute_features(ht, at, state, country_feature_cache[feature_year], stage, r['date'], neutral, not neutral, odds_row))
+        rows.append(compute_features(ht, at, state, country_feature_cache[feature_year], stage, r['date'], neutral, not neutral, odds_row, squad_values))
         labels.append(0 if hs > aw else (1 if hs == aw else 2))
         feature_dates.append(r['date'])
         match_meta.append((ht, at, neutral))
@@ -158,6 +162,7 @@ def train_model_bundle(results_df, country_history, exclude_2026_wc=True, odds=N
         odds=odds,
         poisson_model=poisson_model,
         alpha=alpha,
+        squad_values=squad_values,
     )
 
 def train_model(results_df, country_history):
@@ -165,14 +170,16 @@ def train_model(results_df, country_history):
     # Stash the ensemble pieces on module-level globals so main() can use them
     # without changing the historical (model, state, fl, X, y) return contract
     # that explain_match.py relies on.
-    global _ODDS, _POISSON, _ALPHA
+    global _ODDS, _POISSON, _ALPHA, _SQUAD_VALUES
     _ODDS, _POISSON, _ALPHA = bundle.odds, bundle.poisson_model, bundle.alpha
+    _SQUAD_VALUES = bundle.squad_values
     return bundle.model, bundle.state, bundle.feature_names, bundle.train_X, bundle.train_y
 
 
 _ODDS = None
 _POISSON = None
 _ALPHA = 1.0
+_SQUAD_VALUES = None
 
 def prepare_2026_state(results, state):
     wc26 = results[(results['tournament'] == 'FIFA World Cup') &
@@ -197,7 +204,7 @@ def update_state(state, ta, tb, sa, sb, date, neutral=True):
 def predict(model, fl, ta, tb, state, cf, stage, date, neutral=True, is_home=False):
     ha, hb = harmonize(ta), harmonize(tb)
     odds_row = odds_features_for_match(_ODDS, date, ha, hb)
-    feat = compute_features(ha, hb, state, cf, stage, date, neutral, is_home, odds_row)
+    feat = compute_features(ha, hb, state, cf, stage, date, neutral, is_home, odds_row, _SQUAD_VALUES)
     X = prepare_prediction_frame(feat, fl)
     probs = np.asarray(model.predict_proba(X)[0], dtype=float)
     if _POISSON is not None and _ALPHA < 1.0:

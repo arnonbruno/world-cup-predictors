@@ -1,0 +1,170 @@
+team,year,total_squad_value_eur,avg_player_value_eur,num_players,source
+Spain,2014,765000000,29423077,26,transfermarkt_player_valuations
+Germany,2014,732000000,28153846,26,transfermarkt_player_valuations
+Brazil,2014,662000000,25461538,26,transfermarkt_player_valuations
+Argentina,2014,583000000,22423077,26,transfermarkt_player_valuations
+France,2014,535500000,20596154,26,transfermarkt_player_valuations
+England,2014,464500000,17865385,26,transfermarkt_player_valuations
+Italy,2014,434000000,16692308,26,transfermarkt_player_valuations
+Belgium,2014,425500000,16365385,26,transfermarkt_player_valuations
+Portugal,2014,364000000,14000000,26,transfermarkt_player_valuations
+Colombia,2014,332000000,12769231,26,transfermarkt_player_valuations
+Netherlands,2014,299750000,11528846,26,transfermarkt_player_valuations
+Uruguay,2014,261050000,10040385,26,transfermarkt_player_valuations
+Croatia,2014,253250000,9740385,26,transfermarkt_player_valuations
+Russia,2014,222500000,8557692,26,transfermarkt_player_valuations
+Switzerland,2014,198750000,7644231,26,transfermarkt_player_valuations
+Ivory Coast,2014,176450000,6786538,26,transfermarkt_player_valuations
+Chile,2014,172750000,6644231,26,transfermarkt_player_valuations
+Bosnia and Herzegovina,2014,136450000,5248077,26,transfermarkt_player_valuations
+Cameroon,2014,134200000,5161538,26,transfermarkt_player_valuations
+Mexico,2014,132300000,5088462,26,transfermarkt_player_valuations
+Nigeria,2014,128700000,4950000,26,transfermarkt_player_valuations
+Ghana,2014,121300000,4665385,26,transfermarkt_player_valuations
+Greece,2014,101900000,3919231,26,transfermarkt_player_valuations
+Japan,2014,101000000,3884615,26,transfermarkt_player_valuations
+Algeria,2014,93800000,3607692,26,transfermarkt_player_valuations
+United States,2014,69450000,2671154,26,transfermarkt_player_valuations
+Ecuador,2014,57140000,2197692,26,transfermarkt_player_valuations
+South Korea,2014,55325000,2127885,26,transfermarkt_player_valuations
+Costa Rica,2014,49325000,1897115,26,transfermarkt_player_valuations
+Australia,2014,32850000,1263462,26,transfermarkt_player_valuations
+Iran,2014,18325000,704808,26,transfermarkt_player_valuations
+Honduras,2014,14975000,880882,17,transfermarkt_player_valuations
+France,2018,1378000000,53000000,26,transfermarkt_player_valuations
+Spain,2018,1347000000,51807692,26,transfermarkt_player_valuations
+Brazil,2018,1303000000,50115385,26,transfermarkt_player_valuations
+Germany,2018,1099000000,42269231,26,transfermarkt_player_valuations
+England,2018,1031000000,39653846,26,transfermarkt_player_valuations
+Argentina,2018,978000000,37615385,26,transfermarkt_player_valuations
+Belgium,2018,820500000,31557692,26,transfermarkt_player_valuations
+Portugal,2018,702000000,27000000,26,transfermarkt_player_valuations
+Uruguay,2018,417000000,16038462,26,transfermarkt_player_valuations
+Croatia,2018,409000000,15730769,26,transfermarkt_player_valuations
+Senegal,2018,356500000,13711538,26,transfermarkt_player_valuations
+Serbia,2018,347000000,13346154,26,transfermarkt_player_valuations
+Colombia,2018,317500000,12211538,26,transfermarkt_player_valuations
+Poland,2018,304200000,11700000,26,transfermarkt_player_valuations
+Denmark,2018,304000000,11692308,26,transfermarkt_player_valuations
+Switzerland,2018,254000000,9769231,26,transfermarkt_player_valuations
+Russia,2018,216000000,8307692,26,transfermarkt_player_valuations
+Morocco,2018,208800000,8030769,26,transfermarkt_player_valuations
+Egypt,2018,199425000,7670192,26,transfermarkt_player_valuations
+Nigeria,2018,193900000,7457692,26,transfermarkt_player_valuations
+Mexico,2018,189750000,7298077,26,transfermarkt_player_valuations
+Sweden,2018,148000000,5692308,26,transfermarkt_player_valuations
+South Korea,2018,108925000,4189423,26,transfermarkt_player_valuations
+Japan,2018,104800000,4030769,26,transfermarkt_player_valuations
+Iceland,2018,78750000,3028846,26,transfermarkt_player_valuations
+Tunisia,2018,69700000,2680769,26,transfermarkt_player_valuations
+Iran,2018,54400000,2092308,26,transfermarkt_player_valuations
+Australia,2018,52300000,2011538,26,transfermarkt_player_valuations
+Peru,2018,49700000,1911538,26,transfermarkt_player_valuations
+Costa Rica,2018,37900000,1457692,26,transfermarkt_player_valuations
+Saudi Arabia,2018,17800000,684615,26,transfermarkt_player_valuations
+Panama,2018,7700000,296154,26,transfermarkt_player_valuations
+England,2022,1520000000,58461538,26,transfermarkt_player_valuations
+France,2022,1355000000,52115385,26,transfermarkt_player_valuations
+Brazil,2022,1332000000,51230769,26,transfermarkt_player_valuations
+Spain,2022,1138000000,43769231,26,transfermarkt_player_valuations
+Portugal,2022,1088000000,41846154,26,transfermarkt_player_valuations
+Germany,2022,1001000000,38500000,26,transfermarkt_player_valuations
+Argentina,2022,753500000,28980769,26,transfermarkt_player_valuations
+Netherlands,2022,723000000,27807692,26,transfermarkt_player_valuations
+Belgium,2022,633000000,24346154,26,transfermarkt_player_valuations
+Uruguay,2022,514000000,19769231,26,transfermarkt_player_valuations
+Denmark,2022,411000000,15807692,26,transfermarkt_player_valuations
+Croatia,2022,410500000,15788462,26,transfermarkt_player_valuations
+Serbia,2022,370500000,14250000,26,transfermarkt_player_valuations
+United States,2022,340500000,13096154,26,transfermarkt_player_valuations
+Morocco,2022,325600000,12523077,26,transfermarkt_player_valuations
+Senegal,2022,320500000,12326923,26,transfermarkt_player_valuations
+Switzerland,2022,303200000,11661538,26,transfermarkt_player_valuations
+Poland,2022,287800000,11069231,26,transfermarkt_player_valuations
+Ghana,2022,246800000,9492308,26,transfermarkt_player_valuations
+Mexico,2022,228000000,8769231,26,transfermarkt_player_valuations
+Cameroon,2022,204800000,7876923,26,transfermarkt_player_valuations
+Canada,2022,198300000,7626923,26,transfermarkt_player_valuations
+Wales,2022,191500000,7365385,26,transfermarkt_player_valuations
+Japan,2022,177000000,6807692,26,transfermarkt_player_valuations
+South Korea,2022,167500000,6442308,26,transfermarkt_player_valuations
+Ecuador,2022,158200000,6084615,26,transfermarkt_player_valuations
+Tunisia,2022,77400000,2976923,26,transfermarkt_player_valuations
+Iran,2022,63175000,2429808,26,transfermarkt_player_valuations
+Australia,2022,44050000,1694231,26,transfermarkt_player_valuations
+Saudi Arabia,2022,31050000,1194231,26,transfermarkt_player_valuations
+Costa Rica,2022,29150000,1121154,26,transfermarkt_player_valuations
+Qatar,2022,23950000,921154,26,transfermarkt_player_valuations
+France,2026,1843000000,70884615,26,transfermarkt_player_current_values
+England,2026,1780000000,68461538,26,transfermarkt_player_current_values
+Spain,2026,1535000000,59038462,26,transfermarkt_player_current_values
+Portugal,2026,1195000000,45961538,26,transfermarkt_player_current_values
+Germany,2026,947000000,36423077,26,transfermarkt_national_teams_current
+Brazil,2026,928200012,35700000,26,transfermarkt_national_teams_current
+Argentina,2026,807500000,31057692,26,transfermarkt_national_teams_current
+Netherlands,2026,754200012,29007693,26,transfermarkt_national_teams_current
+Ivory Coast,2026,612000000,23538462,26,transfermarkt_player_current_values
+Norway,2026,589900024,22688462,26,transfermarkt_national_teams_current
+Belgium,2026,547500000,21057692,26,transfermarkt_national_teams_current
+Senegal,2026,478100006,18388462,26,transfermarkt_national_teams_current
+Turkey,2026,473700012,18219231,26,transfermarkt_national_teams_current
+Morocco,2026,447700012,17219231,26,transfermarkt_national_teams_current
+Sweden,2026,406079987,15618461,26,transfermarkt_national_teams_current
+Croatia,2026,387299988,14896153,26,transfermarkt_national_teams_current
+United States,2026,385649994,14832692,26,transfermarkt_national_teams_current
+Ecuador,2026,368700012,14180770,26,transfermarkt_national_teams_current
+Uruguay,2026,359299988,13819230,26,transfermarkt_national_teams_current
+Switzerland,2026,332500000,12788462,26,transfermarkt_national_teams_current
+Italy,2026,319000000,13869565,23,transfermarkt_national_teams_current
+Colombia,2026,302350006,11628846,26,transfermarkt_national_teams_current
+Japan,2026,270850006,10417308,26,transfermarkt_national_teams_current
+Algeria,2026,256899994,9880769,26,transfermarkt_national_teams_current
+Austria,2026,245199997,9430769,26,transfermarkt_national_teams_current
+Czech Republic,2026,240000000,9230769,26,transfermarkt_player_current_values
+Ghana,2026,234350006,9013462,26,transfermarkt_national_teams_current
+Canada,2026,198649994,7640384,26,transfermarkt_national_teams_current
+Mexico,2026,191850006,7378846,26,transfermarkt_national_teams_current
+DR Congo,2026,180500000,6942308,26,transfermarkt_player_current_values
+Scotland,2026,170250000,6548077,26,transfermarkt_national_teams_current
+Paraguay,2026,153649994,5909615,26,transfermarkt_national_teams_current
+South Korea,2026,151900000,5842308,26,transfermarkt_player_current_values
+Republic of Ireland,2026,146850006,5438889,27,transfermarkt_national_teams_current
+Bosnia and Herzegovina,2026,146399994,5630769,26,transfermarkt_national_teams_current
+Egypt,2026,116480003,4480000,26,transfermarkt_national_teams_current
+Uzbekistan,2026,85129997,3274231,26,transfermarkt_national_teams_current
+Australia,2026,77449997,2978846,26,transfermarkt_national_teams_current
+Cape Verde,2026,75600000,2907692,26,transfermarkt_player_current_values
+Tunisia,2026,69949997,2690384,26,transfermarkt_national_teams_current
+Israel,2026,68099998,2960869,23,transfermarkt_national_teams_current
+Haiti,2026,56200000,2161538,26,transfermarkt_player_current_values
+Saudi Arabia,2026,40680000,1564615,26,transfermarkt_national_teams_current
+Panama,2026,34549999,1328846,26,transfermarkt_national_teams_current
+New Zealand,2026,34299999,1319231,26,transfermarkt_national_teams_current
+Iran,2026,32049999,1232692,26,transfermarkt_national_teams_current
+Jordan,2026,20299999,780769,26,transfermarkt_national_teams_current
+Qatar,2026,19930000,766538,26,transfermarkt_national_teams_current
+South Africa,2010,45000000,1700000,26,estimated
+Bolivia,2014,15000000,580000,26,estimated
+Curaçao,2026,5000000,190000,26,estimated
+Iraq,2026,12000000,460000,26,estimated
+Angola,2006,20000000,770000,26,estimated
+Bulgaria,1998,30000000,1150000,26,estimated
+China,2002,15000000,580000,26,estimated
+Cuba,1938,1000000,40000,26,estimated
+Czechoslovakia,1990,25000000,960000,26,estimated
+El Salvador,1982,3000000,115000,26,estimated
+German DR,1974,5000000,190000,26,estimated
+Hungary,1986,15000000,580000,26,estimated
+Indonesia,1938,1000000,40000,26,estimated
+Jamaica,1998,8000000,310000,26,estimated
+Kuwait,1982,3000000,115000,26,estimated
+North Korea,2010,5000000,190000,26,estimated
+Northern Ireland,1986,10000000,385000,26,estimated
+Romania,1998,40000000,1500000,26,estimated
+Slovakia,2010,25000000,960000,26,estimated
+Slovenia,2010,20000000,770000,26,estimated
+Togo,2006,10000000,385000,26,estimated
+Trinidad and Tobago,2006,8000000,310000,26,estimated
+Ukraine,2006,80000000,3100000,26,estimated
+United Arab Emirates,1990,5000000,190000,26,estimated
+Yugoslavia,1998,35000000,1350000,26,estimated

@@ -160,6 +160,7 @@ class ModelBundle:
     train_X: pd.DataFrame | None = None
     train_y: pd.Series | np.ndarray | None = None
     train_probabilities: np.ndarray | None = None
+    squad_values: dict[tuple[str, int], dict[str, float]] | None = None
 
 
 @dataclass
@@ -329,6 +330,8 @@ def build_match_features_from_state(
         match_date,
         neutral,
         is_home,
+        odds_row=None,
+        squad_values=bundle.squad_values,
     )
     frame = coerce_feature_frame(features)
     if frame is None or frame.empty:
@@ -397,6 +400,7 @@ def bundle_from_training_parts(
     train_X: pd.DataFrame | None = None,
     train_y: Any | None = None,
     country_features: dict[str, dict[str, float]] | None = None,
+    squad_values: dict[tuple[str, int], dict[str, float]] | None = None,
 ) -> ModelBundle:
     class_labels = list(getattr(model, "classes_", OUTCOME_LABELS))
     if len(class_labels) == 0:
@@ -409,6 +413,7 @@ def bundle_from_training_parts(
         train_X=train_X,
         train_y=train_y,
         country_features=country_features,
+        squad_values=squad_values,
     )
 
 
@@ -448,6 +453,7 @@ def load_model_from_predict_module(module: Any | None, notes: RuntimeNotes) -> M
                     train_X=getattr(result, "train_X", None),
                     train_y=getattr(result, "train_y", None),
                     country_features=getattr(result, "country_features", None),
+                    squad_values=getattr(result, "squad_values", None),
                 )
         except Exception as exc:
             notes.warn(f"Could not train via `predict_2026.train_model_bundle()`: {exc}")
@@ -467,6 +473,7 @@ def load_model_from_predict_module(module: Any | None, notes: RuntimeNotes) -> M
                     notes=notes,
                     train_X=train_X,
                     train_y=train_y,
+                    squad_values=getattr(module, "_SQUAD_VALUES", None),
                 )
             if has_predict_proba(result):
                 notes.warn("`predict_2026.train_model()` returned a bare model without state/schema; ignoring it.")

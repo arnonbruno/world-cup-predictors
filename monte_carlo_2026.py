@@ -25,6 +25,7 @@ from shared import (
     sample_weights,
     load_betting_odds,
     odds_features_for_match,
+    load_squad_values,
     fit_dixon_coles,
     blend_probabilities,
     harmonize_country,
@@ -61,9 +62,10 @@ def update_elo(elo_a, elo_b, score_a, score_b, neutral=True):
 _ODDS = None
 _POISSON = None
 _ALPHA = 1.0
+_SQUAD_VALUES = None
 
-def compute_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False, odds_row=None):
-    return compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral, is_home, odds_row)
+def compute_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False, odds_row=None, squad_values=None):
+    return compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral, is_home, odds_row, squad_values)
 
 def update_state(state, ta, tb, sa, sb, date, neutral=True):
     apply_match_to_state(state, ta, tb, sa, sb, date, neutral=neutral, is_world_cup=True)
@@ -71,7 +73,7 @@ def update_state(state, ta, tb, sa, sb, date, neutral=True):
 def predict_probs(model, fl, ta, tb, state, cf, stage, date):
     ha, hb = harmonize(ta), harmonize(tb)
     odds_row = odds_features_for_match(_ODDS, date, ha, hb)
-    feat = compute_features(ha, hb, state, cf, stage, date, odds_row=odds_row)
+    feat = compute_features(ha, hb, state, cf, stage, date, odds_row=odds_row, squad_values=_SQUAD_VALUES)
     X = prepare_prediction_frame(feat, fl)
     probs = np.asarray(model.predict_proba(X)[0], dtype=float)  # [p_home_win, p_draw, p_away_win]
     if _POISSON is not None and _ALPHA < 1.0:
@@ -222,12 +224,13 @@ def run_one_sim(model, fl, base_state, cf, base_groups, remaining_matches):
 def main():
     print(f"Running {N_SIMS} Monte Carlo simulations...\n")
 
-    global _ODDS, _POISSON, _ALPHA
+    global _ODDS, _POISSON, _ALPHA, _SQUAD_VALUES
     results = pd.read_csv('data/results.csv')
     country_history = load_country_feature_history()
     cf = country_features_for_year(country_history, 2022)
     base_groups, remaining_matches = build_2026_group_state(results)
     _ODDS = load_betting_odds()
+    _SQUAD_VALUES = load_squad_values()
 
     # Train model once
     df = results.copy()
@@ -259,7 +262,7 @@ def main():
         neutral = parse_bool(r.get('neutral', True))
         stage = wc_stage_by_index.get(int(r.name), 0) if is_world_cup else 0
         odds_row = odds_features_for_match(_ODDS, r['date'], ht, at)
-        rows.append(compute_features(ht, at, state, country_feature_cache[feature_year], stage, r['date'], neutral, not neutral, odds_row))
+        rows.append(compute_features(ht, at, state, country_feature_cache[feature_year], stage, r['date'], neutral, not neutral, odds_row, _SQUAD_VALUES))
         labels.append(0 if hs > aw else (1 if hs == aw else 2))
         feature_dates.append(r['date'])
         match_meta.append((ht, at, neutral))

@@ -22,6 +22,7 @@ from shared import (
     load_country_feature_history,
     load_betting_odds,
     odds_features_for_match,
+    load_squad_values,
     country_features_for_year,
     compute_match_features,
     harmonize_country,
@@ -74,7 +75,7 @@ def _tune_blend_alpha(xgb_model, poisson_model, feature_names, X_val, y_val,
     return float(best_alpha), float(best_loss)
 
 
-def train_model(results_df, country_history, odds=None):
+def train_model(results_df, country_history, odds=None, squad_values=None):
     """Train XGBoost + Dixon-Coles on all pre-2026-WC matches.
 
     Adds: bookmaker implied-probability features, time-decay + draw sample
@@ -122,6 +123,7 @@ def train_model(results_df, country_history, odds=None):
         rows.append(compute_match_features(
             ht, at, state, country_feature_cache[feature_year], stage, r["date"],
             neutral=neutral, is_home=is_home, odds_row=odds_row,
+            squad_values=squad_values,
         ))
         labels.append(0 if hs > aw else (1 if hs == aw else 2))
         feature_dates.append(r["date"])
@@ -185,7 +187,7 @@ def prepare_2026_state(state, results_df):
 
 def predict_match(model, feature_names, home, away, state, cf, stage, date,
                   neutral=True, is_home=False, odds=None,
-                  poisson_model=None, alpha=1.0):
+                  poisson_model=None, alpha=1.0, squad_values=None):
     """Predict a single match. Returns (predicted_label_idx, probs[3]).
 
     Blends the (calibrated) XGBoost probabilities with the Dixon-Coles Poisson
@@ -193,7 +195,8 @@ def predict_match(model, feature_names, home, away, state, cf, stage, date,
     """
     odds_row = odds_features_for_match(odds, date, home, away)
     feat = compute_match_features(home, away, state, cf, stage, date,
-                                  neutral=neutral, is_home=is_home, odds_row=odds_row)
+                                  neutral=neutral, is_home=is_home, odds_row=odds_row,
+                                  squad_values=squad_values)
     X = prepare_prediction_frame(feat, feature_names)
     probs = np.asarray(model.predict_proba(X)[0], dtype=float)
 
@@ -258,11 +261,13 @@ def run_backtest():
     country_history = load_country_feature_history()
     odds = load_betting_odds()
     print(f"Loaded bookmaker odds for {len(odds) // 2} fixtures.")
+    squad_values = load_squad_values()
+    print(f"Loaded squad values for {len(squad_values)} team-years.")
 
     # Train model on all pre-2026-WC data
     print("Training model on historical data (excluding 2026 WC)...")
     model, state, feature_names, poisson_model, alpha = train_model(
-        results_df, country_history, odds=odds,
+        results_df, country_history, odds=odds, squad_values=squad_values,
     )
     print(f"  Trained on {sum(1 for _, r in results_df.iterrows() if r['home_score'] == r['home_score'])} matches")
     print()
@@ -306,6 +311,7 @@ def run_backtest():
             model, feature_names, home, away, state, cf, stage, date,
             neutral=neutral, is_home=is_home,
             odds=odds, poisson_model=poisson_model, alpha=alpha,
+            squad_values=squad_values,
         )
         actual_idx = actual_result(hs, aw)
 
