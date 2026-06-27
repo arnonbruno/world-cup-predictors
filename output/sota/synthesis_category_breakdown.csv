@@ -1,0 +1,9 @@
+category,mean_avg_rank,features_in_top10,n_features
+demographics,26.125,5,8
+economy,32.85,7,19
+football,17.73846153846154,11,13
+geography,45.90625,2,8
+health,42.125,0,4
+infrastructure,36.833333333333336,1,3
+institutions,61.833333333333336,0,6
+other,34.68125,3,8

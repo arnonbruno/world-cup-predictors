@@ -1,0 +1,39 @@
+{
+  "leaking_drop_immediately": [
+    "runner_up",
+    "semifinalist",
+    "finalist",
+    "top4",
+    "is_winner",
+    "gdp_per_capita_vs_winner",
+    "population_vs_winner"
+  ],
+  "safe_keep": [
+    "is_host",
+    "elo_rating",
+    "fifa_rank",
+    "fifa_rank_inverse",
+    "football_tradition",
+    "football_power_index",
+    "is_former_champion",
+    "is_strong_europe",
+    "is_strong_sa",
+    "wc_titles_before",
+    "wc_finals_before",
+    "wc_semifinals_before",
+    "wc_participations_before",
+    "years_since_last_wc",
+    "years_since_last_win",
+    "years_since_last_final"
+  ],
+  "validation_required_keep": [
+    "gdp_per_capita_vs_avg",
+    "population_vs_avg"
+  ],
+  "post_tournament_drop_for_prediction": [
+    "total_goals_in_tournament",
+    "avg_goals_per_match"
+  ],
+  "missing_expected_safe_columns": [],
+  "missing_expected_leak_columns": []
+}

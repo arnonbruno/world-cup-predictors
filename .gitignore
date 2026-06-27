@@ -1,0 +1,17 @@
+# Raw data files (can be re-downloaded)
+data/results.csv
+data/goalscorers.csv
+data/shootouts.csv
+data/worldbank_raw.json
+
+# Large generated feature matrix (regenerable)
+output/match_predictor/match_features.csv
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
+.DS_Store
+Thumbs.db

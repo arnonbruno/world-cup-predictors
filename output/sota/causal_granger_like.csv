@@ -1,0 +1,4 @@
+spec,features,mean_auc_lowco,mean_f1_lowco
+t4,"gdp_per_capita_log_t4,population_log_t4,gdp_growth_t4",0.6845898773437308,0.131924136469591
+t8,"gdp_per_capita_log_t8,population_log_t8,gdp_growth_t8",0.6820777523939768,0.15721601630692542
+t1_like,"gdp_per_capita_log_t1_like,population_log_t1_like,gdp_growth_t1_like",0.677948206956629,0.1238665746018687
