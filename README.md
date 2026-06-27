@@ -1,84 +1,186 @@
-# FIFA World Cup Winner Predictors
+# FIFA World Cup 2026 Predictor
 
-Econometric and machine learning analysis of what predicts FIFA World Cup champions. Combines football-specific variables (Elo ratings, form, H2H, tournament history) with 83 country-level indicators (GDP, population, healthcare, education, urbanization, etc.) from the World Bank.
+Machine learning system that predicts FIFA World Cup match outcomes and tournament winners. Combines Elo ratings, match form, head-to-head records, squad market values, and bookmaker odds into an ensemble of XGBoost and Dixon-Coles Poisson models.
 
-## Approach
+## 2026 World Cup Prediction
 
-Three progressively sophisticated models:
+> **Prediction made: June 27, 2026**
 
-### 1. Country-Level Model (`sota_analysis.py`)
-Static features per country per World Cup year. Leave-One-World-Cout-Out (LOWCO) validation.
-- Regularized Logit AUC: 0.966
-- XGBoost AUC: 0.941
-- Backtest: 9/22 exact winner (40.9%), 14/22 top-3 (63.6%)
+| Place | Team | Probability |
+|-------|------|-------------|
+| 🥇 Champion | **Argentina** | 70.5% |
+| 🥈 Runner-up | **Spain** | — |
+| 🥉 Third | **Brazil** | 71.3% (vs France) |
+| 4th | **France** | — |
 
-### 2. Monte Carlo Match Simulator (`match_predictor.py`)
-XGBoost match outcome model + 1000 bracket simulations per World Cup.
-- Match accuracy: 59.4%
-- Backtest: 7/22 exact winner (31.8%), 11/22 top-3 (50.0%)
+**Path to the final:**
+- Argentina: Algeria ✅ → Austria ✅ → Colombia (QF) → Brazil (SF, 51.7%) → Spain (Final, 70.5%)
+- Spain: Saudi Arabia ✅ → Croatia ✅ → Belgium (QF) → France (SF, 55.6%) → Argentina (Final)
+- Brazil: Japan (R32) → Norway (R16) → England (QF, 73.6%) → Argentina (SF, 48.3%) → France (3rd place)
 
-### 3. Incremental Match Predictor (`incremental_predictor.py`)
-Walks through actual WC matches chronologically. For each match: compute features from current state, predict, observe result, update state (Elo, form, H2H, tournament progress). No simulation.
-- Match accuracy: 54.0%
-- **Backtest: 19/22 exact winner (86.4%) via final-winner strategy**
-- Top-3: 20/22 (90.9%), Top-5: 21/22 (95.5%)
-- Winner AUC: 0.934
+## How It Works
 
-## Key Findings
+### Model Architecture
 
-- Football-specific variables dominate: Elo rating, historical titles, tournament experience
-- Economic variables (GDP per capita) are nearly useless for predicting winners
-- Hosting provides a real but not strictly causal boost (~+5-14%)
-- The incremental approach dramatically outperforms static models and simulations
-- The "predict the final winner" strategy (86.4%) crushes "most wins" (54.5%)
+The system uses a **blended ensemble** of two models:
+
+1. **XGBoost Classifier** (25% weight) — gradient-boosted trees trained on 52 features per match, with isotonic calibration, draw class weighting (1.6×), and time-decay sample weights (half-life: 4 years).
+
+2. **Dixon-Coles Poisson Goal Model** (75% weight) — models goals scored as Poisson distributions with team-specific attack/defense strengths and home advantage. Naturally produces realistic draw probabilities. Blend weight tuned on chronological holdout.
+
+### Features (52 total)
+
+**Team Strength (7):**
+- Elo rating (current), Elo difference, Elo sum
+- Pre-tournament Elo, FIFA rank, football power index, tradition
+
+**Form & Momentum (10):**
+- Win/draw/loss rate (last 20 matches)
+- Avg goals scored/conceded (last 5 and 10 matches)
+- Elo momentum (change over last 5/10 matches, differential)
+- Attack/defense trend (recent 3 vs 10 match baseline)
+
+**Head-to-Head (5):**
+- H2H matches, win rate, draw rate
+- Avg goals for/against in H2H
+
+**Opponent-Weighted Form (2):**
+- Form weighted by opponent Elo (beating Argentina > beating Haiti)
+- Differential vs opponent
+
+**Squad Market Value (4):**
+- Team and opponent squad value (log-scaled EUR, from Transfermarkt)
+- Value difference and ratio
+
+**Bookmaker Odds (4):**
+- Implied home/draw/away probabilities
+- Overround (bookmaker margin)
+
+**Draw Propensity (4):**
+- Elo parity (1 / (1 + |elo_diff| / 100))
+- Combined draw rate of both teams
+- Expected total goals, low-scoring indicator
+
+**Fatigue (3):**
+- Matches in last 30/90 days, differential
+
+**Context (7):**
+- Tournament stage, neutral venue, home advantage
+- Rest days, WC participations, titles, WC win rate
+
+**Country Demographics (6):**
+- GDP per capita, population, life expectancy
+- Urbanization %, health spending % GDP, and others
+
+### Training Pipeline
+
+1. **Data:** ~50,000 international matches (1872–2026)
+2. **State management:** Rolling Elo, form windows (20 matches), H2H records, all updated chronologically
+3. **Feature engineering:** `shared.py` centralizes all feature computation — same code for training, backtest, and prediction
+4. **Validation:** Chronological holdout (last 20% of matches), NOT random split
+5. **Calibration:** Isotonic regression on holdout probabilities
+6. **Missing data:** XGBoost handles NaN natively (odds and squad values absent for older matches)
+
+### Knockout Stage Handling
+
+Knockout matches cannot end in a draw. The model renormalizes probabilities:
+- P(home | no draw) = P(home) / (P(home) + P(away))
+- Applied to predictions, Elo baseline, and counterfactuals
+
+## Performance
+
+### Backtest on 2026 World Cup Group Stage (62 matches)
+
+Walk-forward backtest: predict each match, compare to actual result, update state with real result, predict next.
+
+| Metric | Value |
+|--------|-------|
+| **Accuracy** | 64.5% (40/62) |
+| **Log-loss** | 0.8858 |
+| **Brier score** | 0.1791 |
+
+**Calibration:**
+- 30-40% confidence: 83.3% actual accuracy
+- 50-60% confidence: 60.0% actual accuracy
+- 70-80% confidence: 70.0% actual accuracy
+
+**Weakness:** Draws remain difficult — 9 of 22 draws were missed at ≥60% confidence. The Dixon-Coles Poisson model (75% of blend) helps significantly with draw estimation.
+
+### Model Evolution
+
+| Version | Accuracy | Log-loss | Brier | Key Changes |
+|---------|----------|----------|-------|-------------|
+| V1 (baseline) | 62.9% | 0.9143 | 0.1850 | 38 features, XGBoost only |
+| V2 (Opus review) | 61.3% | 0.9018 | 0.1825 | +14 features, bug fixes |
+| V3 (ensemble) | **64.5%** | **0.8858** | **0.1791** | Dixon-Coles, odds, calibration |
+| V4 (squad values) | 64.5% | 0.8897 | 0.1797 | +4 squad value features |
 
 ## Data Sources
 
-- **Match results**: [martj42/international_results](https://github.com/martj42/international_results) (49,477 matches, 1872-2026)
-- **Country indicators**: World Bank API (GDP, population, health, education, 83 variables)
-- **Football context**: Elo ratings computed from match history, FIFA rankings
+| Data | Source | Records | Coverage |
+|------|--------|---------|----------|
+| Match results | [martj42/international_results](https://github.com/martj42/international_results) | 49,477 | 1872–2026 |
+| Bookmaker odds | [football-data.co.uk](https://football-data.co.uk) | 2,144 | 2014–2026 |
+| Squad values | [Transfermarkt](https://www.transfermarkt.com) via [dcaribou/transfermarkt-datasets](https://github.com/dcaribou/transfermarkt-datasets) | 169 team-years | 2014–2026 |
+| Country indicators | World Bank API | 83 variables | 1960–2024 |
+| Elo ratings | Computed from match history | Continuous | 1872–2026 |
 
 ## Project Structure
 
 ```
-├── collect_data.py          # World Bank data collection + dataset builder
-├── enrich_dataset.py        # FIFA rankings/Elo enrichment
-├── analysis.py              # Initial ML analysis
-├── sota_analysis.py         # SOTA econometric + ML analysis (cursor-agent)
-├── backtest.py              # LOWCO backtest for country-level model
-├── match_predictor.py       # Monte Carlo match simulator (cursor-agent)
-├── incremental_predictor.py # Incremental match predictor (cursor-agent)
-├── ANALYSIS_SPEC.md         # Spec for SOTA analysis
-├── MATCH_SPEC.md            # Spec for match predictor
-├── INCREMENTAL_SPEC.md      # Spec for incremental predictor
+├── shared.py                  # Centralized feature engineering, state, Elo, aliases
+├── predict_2026.py            # Main 2026 WC prediction pipeline
+├── backtest_2026_wc.py        # Walk-forward backtest on 2026 group matches
+├── explain_match.py           # SHAP-based match explanation engine
+├── monte_carlo_2026.py        # Monte Carlo tournament simulation (10K runs)
+├── feature_selection.py       # Permutation importance feature selection
+├── collect_data.py            # World Bank data collection
+├── enrich_dataset.py          # FIFA rankings/Elo enrichment
+├── sota_analysis.py           # SOTA econometric + ML analysis
+├── backtest.py                # LOWCO backtest for country-level model
+├── match_predictor.py         # Monte Carlo match simulator
+├── incremental_predictor.py   # Walk-forward match predictor
+├── analysis.py                # Exploratory analysis
+│
 ├── data/
-│   └── world_cup_predictors_dataset.csv  # 467 rows, 83 features
-└── output/
-    ├── sota/                # SOTA analysis outputs + figures
-    ├── match_predictor/     # Monte Carlo simulator outputs
-    └── incremental/         # Incremental predictor outputs
+│   ├── results.csv            # 49,477 match results (1872-2026)
+│   ├── betting_odds.csv       # 2,144 matches with bookmaker odds
+│   ├── squad_values.csv       # 169 team-years of Transfermarkt values
+│   ├── goalscorers.csv        # Goal-level data
+│   ├── shootouts.csv          # Penalty shootout data
+│   └── world_cup_predictors_dataset.csv  # Country-level features
+│
+├── output/
+│   ├── explain/               # SHAP waterfall/force plots per matchup
+│   ├── sota/                  # SOTA analysis outputs
+│   └── ...
+│
+├── IMPROVEMENTS.md            # Code review + improvement roadmap
+├── IMPROVEMENTS_V2.md         # V2 improvement results
+├── REVIEW.md                  # Code review findings
+├── REVIEW_EXPLAIN.md          # Explain module review
+└── SQUAD_VALUES_RESULTS.md    # Squad value integration results
 ```
 
 ## Setup
 
-Raw data files are excluded from the repo (too large). To regenerate:
-
 ```bash
-# Download match data
+# Install dependencies
+pip install pandas numpy scikit-learn xgboost shap scipy matplotlib
+
+# Download raw data (not in repo — too large)
 curl -o data/results.csv https://raw.githubusercontent.com/martj42/international_results/master/results.csv
 curl -o data/goalscorers.csv https://raw.githubusercontent.com/martj42/international_results/master/goalscorers.csv
 curl -o data/shootouts.csv https://raw.githubusercontent.com/martj42/international_results/master/shootouts.csv
 
-# Collect World Bank data + build dataset
-python3 collect_data.py
-python3 enrich_dataset.py
-
-# Run analyses
-python3 sota_analysis.py
-python3 match_predictor.py
-python3 incremental_predictor.py
+# Run predictions
+python3 predict_2026.py              # Full bracket prediction
+python3 backtest_2026_wc.py          # Walk-forward backtest
+python3 explain_match.py Brazil Japan --stage 1   # Match explanation with SHAP
+python3 monte_carlo_2026.py          # 10K tournament simulations
+python3 feature_selection.py         # Feature importance analysis
 ```
 
 ## Requirements
 
-Python 3.11+ with: pandas, numpy, scikit-learn, xgboost, shap, statsmodels, matplotlib, wbgapi, lxml
+Python 3.11+ with: pandas, numpy, scikit-learn, xgboost, shap, scipy, matplotlib
