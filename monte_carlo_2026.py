@@ -20,6 +20,13 @@ from shared import (
     country_features_for_year,
     fit_xgb_with_validation,
     finalize_world_cup_history,
+    finalize_feature_frame,
+    prepare_prediction_frame,
+    sample_weights,
+    load_betting_odds,
+    odds_features_for_match,
+    fit_dixon_coles,
+    blend_probabilities,
     harmonize_country,
     infer_world_cup_stage_map,
     make_team_state,
@@ -51,17 +58,25 @@ def update_elo(elo_a, elo_b, score_a, score_b, neutral=True):
     return (elo_a + K_FACTOR * multiplier * (sa - ea),
             elo_b + K_FACTOR * multiplier * ((1 - sa) - (1 - ea)))
 
-def compute_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False):
-    return compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral, is_home)
+_ODDS = None
+_POISSON = None
+_ALPHA = 1.0
+
+def compute_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False, odds_row=None):
+    return compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral, is_home, odds_row)
 
 def update_state(state, ta, tb, sa, sb, date, neutral=True):
     apply_match_to_state(state, ta, tb, sa, sb, date, neutral=neutral, is_world_cup=True)
 
 def predict_probs(model, fl, ta, tb, state, cf, stage, date):
     ha, hb = harmonize(ta), harmonize(tb)
-    feat = compute_features(ha, hb, state, cf, stage, date)
-    X = pd.DataFrame([feat])[fl].fillna(0)
-    return model.predict_proba(X)[0]  # [p_home_win, p_draw, p_away_win]
+    odds_row = odds_features_for_match(_ODDS, date, ha, hb)
+    feat = compute_features(ha, hb, state, cf, stage, date, odds_row=odds_row)
+    X = prepare_prediction_frame(feat, fl)
+    probs = np.asarray(model.predict_proba(X)[0], dtype=float)  # [p_home_win, p_draw, p_away_win]
+    if _POISSON is not None and _ALPHA < 1.0:
+        probs = blend_probabilities(probs, _POISSON.outcome_probs(ha, hb, neutral=True), _ALPHA)
+    return probs
 
 def sample_ko(probs, ta, tb):
     """Sample knockout result (no draws)."""
@@ -207,10 +222,12 @@ def run_one_sim(model, fl, base_state, cf, base_groups, remaining_matches):
 def main():
     print(f"Running {N_SIMS} Monte Carlo simulations...\n")
 
+    global _ODDS, _POISSON, _ALPHA
     results = pd.read_csv('data/results.csv')
     country_history = load_country_feature_history()
     cf = country_features_for_year(country_history, 2022)
     base_groups, remaining_matches = build_2026_group_state(results)
+    _ODDS = load_betting_odds()
 
     # Train model once
     df = results.copy()
@@ -220,7 +237,7 @@ def main():
 
     state = defaultdict(make_team_state)
 
-    rows, labels, feature_dates = [], [], []
+    rows, labels, feature_dates, match_meta = [], [], [], []
     country_feature_cache = {}
     active_wc_year = None
     active_wc_teams = set()
@@ -241,9 +258,11 @@ def main():
             country_feature_cache[feature_year] = country_features_for_year(country_history, feature_year)
         neutral = parse_bool(r.get('neutral', True))
         stage = wc_stage_by_index.get(int(r.name), 0) if is_world_cup else 0
-        rows.append(compute_features(ht, at, state, country_feature_cache[feature_year], stage, r['date'], neutral, not neutral))
+        odds_row = odds_features_for_match(_ODDS, r['date'], ht, at)
+        rows.append(compute_features(ht, at, state, country_feature_cache[feature_year], stage, r['date'], neutral, not neutral, odds_row))
         labels.append(0 if hs > aw else (1 if hs == aw else 2))
         feature_dates.append(r['date'])
+        match_meta.append((ht, at, neutral))
         if is_world_cup:
             if active_wc_year is None:
                 active_wc_year = feature_year
@@ -254,15 +273,38 @@ def main():
     if active_wc_year is not None:
         finalize_world_cup_history(state, active_wc_year, active_wc_teams)
 
-    X = pd.DataFrame(rows).fillna(0)
+    X = finalize_feature_frame(rows)
     y = np.array(labels)
+    weights = sample_weights(y, feature_dates)
     model = xgb.XGBClassifier(n_estimators=300, max_depth=6, learning_rate=0.1,
                                subsample=0.8, colsample_bytree=0.8,
                                objective='multi:softprob', num_class=3,
                                eval_metric='mlogloss', random_state=42, verbosity=0)
-    model, _metrics = fit_xgb_with_validation(model, X, y, label="XGBoost", dates=feature_dates)
+    model, _metrics = fit_xgb_with_validation(model, X, y, label="XGBoost",
+                                              dates=feature_dates,
+                                              sample_weight=weights, calibrate=True)
     fl = X.columns.tolist()
     print(f"  Model trained on {len(X)} matches, {len(fl)} features")
+
+    # Dixon-Coles Poisson member + blend-weight tuning on the chronological tail.
+    _POISSON = fit_dixon_coles(results)
+    from sklearn.metrics import log_loss as _ll
+    order = pd.Series(pd.to_datetime(feature_dates, errors="coerce")).sort_values().index
+    split = max(1, int(len(order) * 0.8))
+    val_idx = order[split:]
+    p_xgb_val = model.predict_proba(X.iloc[val_idx])
+    p_pois_val = np.array([_POISSON.outcome_probs(match_meta[i][0], match_meta[i][1], neutral=match_meta[i][2]) for i in val_idx])
+    best_alpha, best_loss = 1.0, np.inf
+    for a_ in np.linspace(0.0, 1.0, 21):
+        bl = np.array([blend_probabilities(p_xgb_val[k], p_pois_val[k], a_) for k in range(len(val_idx))])
+        try:
+            lo = _ll(y[val_idx], bl, labels=[0, 1, 2])
+        except Exception:
+            continue
+        if lo < best_loss:
+            best_loss, best_alpha = lo, a_
+    _ALPHA = float(best_alpha)
+    print(f"  Tuned blend alpha (XGB weight) = {_ALPHA:.2f}")
 
     # Process completed 2026 matches into state
     wc26 = results[(results['tournament'] == 'FIFA World Cup') &

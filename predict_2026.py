@@ -21,6 +21,13 @@ from shared import (
     country_features_for_year,
     fit_xgb_with_validation,
     finalize_world_cup_history,
+    finalize_feature_frame,
+    prepare_prediction_frame,
+    sample_weights,
+    load_betting_odds,
+    odds_features_for_match,
+    fit_dixon_coles,
+    blend_probabilities,
     harmonize_country,
     infer_world_cup_stage_map,
     load_country_feature_history,
@@ -48,12 +55,33 @@ class PredictionBundle:
     train_y: np.ndarray
     country_history: dict
     country_features: dict
+    odds: dict = None
+    poisson_model: Any = None
+    alpha: float = 1.0
 
 
-def compute_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False):
-    return compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral, is_home)
+def compute_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False, odds_row=None):
+    return compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral, is_home, odds_row)
 
-def train_model_bundle(results_df, country_history, exclude_2026_wc=True):
+def _tune_blend_alpha(model, poisson_model, X_val, y_val, val_meta):
+    from sklearn.metrics import log_loss as _ll
+    p_xgb = model.predict_proba(X_val)
+    p_pois = np.array([poisson_model.outcome_probs(h, a, neutral=neu) for (h, a, neu) in val_meta])
+    best_alpha, best_loss = 1.0, np.inf
+    for alpha in np.linspace(0.0, 1.0, 21):
+        blended = np.array([blend_probabilities(p_xgb[i], p_pois[i], alpha) for i in range(len(p_xgb))])
+        try:
+            loss = _ll(y_val, blended, labels=[0, 1, 2])
+        except Exception:
+            continue
+        if loss < best_loss:
+            best_loss, best_alpha = loss, alpha
+    return float(best_alpha)
+
+
+def train_model_bundle(results_df, country_history, exclude_2026_wc=True, odds=None):
+    if odds is None:
+        odds = load_betting_odds()
     df = results_df.copy()
     df['date'] = pd.to_datetime(df['date'])
     if exclude_2026_wc:
@@ -62,7 +90,7 @@ def train_model_bundle(results_df, country_history, exclude_2026_wc=True):
     
     state = defaultdict(make_team_state)
     
-    rows, labels, feature_dates = [], [], []
+    rows, labels, feature_dates, match_meta = [], [], [], []
     country_feature_cache = {}
     active_wc_year = None
     active_wc_teams = set()
@@ -83,9 +111,11 @@ def train_model_bundle(results_df, country_history, exclude_2026_wc=True):
             country_feature_cache[feature_year] = country_features_for_year(country_history, feature_year)
         stage = wc_stage_by_index.get(int(r.name), 0) if is_world_cup else 0
         neutral = parse_bool(r.get('neutral', True))
-        rows.append(compute_features(ht, at, state, country_feature_cache[feature_year], stage, r['date'], neutral, not neutral))
+        odds_row = odds_features_for_match(odds, r['date'], ht, at)
+        rows.append(compute_features(ht, at, state, country_feature_cache[feature_year], stage, r['date'], neutral, not neutral, odds_row))
         labels.append(0 if hs > aw else (1 if hs == aw else 2))
         feature_dates.append(r['date'])
+        match_meta.append((ht, at, neutral))
 
         if is_world_cup:
             if active_wc_year is None:
@@ -98,14 +128,25 @@ def train_model_bundle(results_df, country_history, exclude_2026_wc=True):
     if active_wc_year is not None:
         finalize_world_cup_history(state, active_wc_year, active_wc_teams)
     
-    X = pd.DataFrame(rows).fillna(0)
+    X = finalize_feature_frame(rows)
     y = np.array(labels)
+    weights = sample_weights(y, feature_dates)
     model = xgb.XGBClassifier(n_estimators=300, max_depth=6, learning_rate=0.1,
                                subsample=0.8, colsample_bytree=0.8,
                                objective='multi:softprob', num_class=3,
                                eval_metric='mlogloss', random_state=42, verbosity=0)
-    model, _metrics = fit_xgb_with_validation(model, X, y, label="XGBoost", dates=feature_dates)
+    model, _metrics = fit_xgb_with_validation(model, X, y, label="XGBoost",
+                                              dates=feature_dates,
+                                              sample_weight=weights, calibrate=True)
     print(f"  Trained on {len(X)} matches")
+
+    poisson_model = fit_dixon_coles(results_df)
+    order = pd.Series(pd.to_datetime(feature_dates, errors="coerce")).sort_values().index
+    split = max(1, int(len(order) * 0.8))
+    val_idx = order[split:]
+    alpha = _tune_blend_alpha(model, poisson_model, X.iloc[val_idx], y[val_idx],
+                              [match_meta[i] for i in val_idx])
+    print(f"  Tuned blend alpha (XGB weight) = {alpha:.2f}")
     return PredictionBundle(
         model=model,
         state=state,
@@ -114,11 +155,24 @@ def train_model_bundle(results_df, country_history, exclude_2026_wc=True):
         train_y=y,
         country_history=country_history,
         country_features=country_features_for_year(country_history, 2022),
+        odds=odds,
+        poisson_model=poisson_model,
+        alpha=alpha,
     )
 
 def train_model(results_df, country_history):
     bundle = train_model_bundle(results_df, country_history)
+    # Stash the ensemble pieces on module-level globals so main() can use them
+    # without changing the historical (model, state, fl, X, y) return contract
+    # that explain_match.py relies on.
+    global _ODDS, _POISSON, _ALPHA
+    _ODDS, _POISSON, _ALPHA = bundle.odds, bundle.poisson_model, bundle.alpha
     return bundle.model, bundle.state, bundle.feature_names, bundle.train_X, bundle.train_y
+
+
+_ODDS = None
+_POISSON = None
+_ALPHA = 1.0
 
 def prepare_2026_state(results, state):
     wc26 = results[(results['tournament'] == 'FIFA World Cup') &
@@ -142,9 +196,12 @@ def update_state(state, ta, tb, sa, sb, date, neutral=True):
 
 def predict(model, fl, ta, tb, state, cf, stage, date, neutral=True, is_home=False):
     ha, hb = harmonize(ta), harmonize(tb)
-    feat = compute_features(ha, hb, state, cf, stage, date, neutral, is_home)
-    X = pd.DataFrame([feat])[fl].fillna(0)
-    probs = model.predict_proba(X)[0]
+    odds_row = odds_features_for_match(_ODDS, date, ha, hb)
+    feat = compute_features(ha, hb, state, cf, stage, date, neutral, is_home, odds_row)
+    X = prepare_prediction_frame(feat, fl)
+    probs = np.asarray(model.predict_proba(X)[0], dtype=float)
+    if _POISSON is not None and _ALPHA < 1.0:
+        probs = blend_probabilities(probs, _POISSON.outcome_probs(ha, hb, neutral=neutral), _ALPHA)
     pa, pd_, pb = probs[0], probs[1], probs[2]
     # Group stage: allow draw if it's the most likely outcome
     if stage == 0 and pd_ >= pa and pd_ >= pb:

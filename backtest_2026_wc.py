@@ -20,6 +20,8 @@ from shared import (
     INITIAL_ELO,
     DATA_DIR,
     load_country_feature_history,
+    load_betting_odds,
+    odds_features_for_match,
     country_features_for_year,
     compute_match_features,
     harmonize_country,
@@ -29,6 +31,11 @@ from shared import (
     make_team_state,
     parse_bool,
     finalize_world_cup_history,
+    finalize_feature_frame,
+    prepare_prediction_frame,
+    sample_weights,
+    fit_dixon_coles,
+    blend_probabilities,
     GROUP_2026_TEAMS,
     WC2026_STAGE_TO_TRAIN,
 )
@@ -43,8 +50,37 @@ def make_initial_state():
     return defaultdict(make_team_state)
 
 
-def train_model(results_df, country_history):
-    """Train XGBoost on all pre-2026-WC matches, same as predict_2026.py."""
+def _tune_blend_alpha(xgb_model, poisson_model, feature_names, X_val, y_val,
+                      val_meta):
+    """Pick the XGB/Poisson blend weight that minimizes holdout log-loss."""
+    from sklearn.metrics import log_loss as _ll
+
+    p_xgb = xgb_model.predict_proba(X_val)
+    p_pois = np.array([
+        poisson_model.outcome_probs(h, a, neutral=neu)
+        for (h, a, neu) in val_meta
+    ])
+    best_alpha, best_loss = 1.0, np.inf
+    for alpha in np.linspace(0.0, 1.0, 21):
+        blended = np.array([
+            blend_probabilities(p_xgb[i], p_pois[i], alpha) for i in range(len(p_xgb))
+        ])
+        try:
+            loss = _ll(y_val, blended, labels=[0, 1, 2])
+        except Exception:
+            continue
+        if loss < best_loss:
+            best_loss, best_alpha = loss, alpha
+    return float(best_alpha), float(best_loss)
+
+
+def train_model(results_df, country_history, odds=None):
+    """Train XGBoost + Dixon-Coles on all pre-2026-WC matches.
+
+    Adds: bookmaker implied-probability features, time-decay + draw sample
+    weighting, isotonic calibration on the chronological holdout, and a
+    Dixon-Coles Poisson member whose blend weight is tuned on that same holdout.
+    """
     import xgboost as xgb
 
     df = results_df.copy()
@@ -54,6 +90,7 @@ def train_model(results_df, country_history):
 
     state = make_initial_state()
     rows, labels, feature_dates = [], [], []
+    match_meta = []  # (home, away, neutral) aligned with rows, for Poisson blend
     country_feature_cache = {}
     active_wc_year = None
     active_wc_teams = set()
@@ -81,12 +118,14 @@ def train_model(results_df, country_history):
         neutral = parse_bool(r.get("neutral", True))
         is_home = not neutral  # home side of a non-neutral fixture has home advantage
         stage = wc_stage_by_index.get(int(r.name), 0) if is_world_cup else 0
+        odds_row = odds_features_for_match(odds, r["date"], ht, at)
         rows.append(compute_match_features(
             ht, at, state, country_feature_cache[feature_year], stage, r["date"],
-            neutral=neutral, is_home=is_home,
+            neutral=neutral, is_home=is_home, odds_row=odds_row,
         ))
         labels.append(0 if hs > aw else (1 if hs == aw else 2))
         feature_dates.append(r["date"])
+        match_meta.append((ht, at, neutral))
 
         if is_world_cup:
             if active_wc_year is None:
@@ -100,16 +139,33 @@ def train_model(results_df, country_history):
     if active_wc_year is not None:
         finalize_world_cup_history(state, active_wc_year, active_wc_teams)
 
-    X = pd.DataFrame(rows).fillna(0)
+    X = finalize_feature_frame(rows)
     y = np.array(labels)
+    weights = sample_weights(y, feature_dates)
     model = xgb.XGBClassifier(
         objective="multi:softprob", num_class=3,
         eval_metric="mlogloss", random_state=42, verbosity=0,
         n_estimators=300, max_depth=6, learning_rate=0.05,
         subsample=0.8, colsample_bytree=0.8,
     )
-    model, _ = fit_xgb_with_validation(model, X, y, label="XGBoost", dates=feature_dates)
-    return model, state, X.columns.tolist()
+    model, _ = fit_xgb_with_validation(
+        model, X, y, label="XGBoost", dates=feature_dates,
+        sample_weight=weights, calibrate=True,
+    )
+
+    # Dixon-Coles Poisson member + blend-weight tuning on the chronological tail.
+    print("  Fitting Dixon-Coles Poisson goal model...")
+    poisson_model = fit_dixon_coles(results_df)
+    order = pd.Series(pd.to_datetime(feature_dates, errors="coerce")).sort_values().index
+    split = max(1, int(len(order) * 0.8))
+    val_idx = order[split:]
+    X_val = X.iloc[val_idx]
+    y_val = y[val_idx]
+    val_meta = [match_meta[i] for i in val_idx]
+    alpha, blend_loss = _tune_blend_alpha(model, poisson_model, X.columns.tolist(),
+                                          X_val, y_val, val_meta)
+    print(f"  Tuned blend alpha (XGB weight) = {alpha:.2f}  (holdout log-loss {blend_loss:.3f})")
+    return model, state, X.columns.tolist(), poisson_model, alpha
 
 
 def prepare_2026_state(state, results_df):
@@ -127,11 +183,23 @@ def prepare_2026_state(state, results_df):
     return state
 
 
-def predict_match(model, feature_names, home, away, state, cf, stage, date, neutral=True, is_home=False):
-    """Predict a single match. Returns (predicted_label_idx, probs[3])."""
-    feat = compute_match_features(home, away, state, cf, stage, date, neutral=neutral, is_home=is_home)
-    X = pd.DataFrame([feat])[feature_names].fillna(0)
-    probs = model.predict_proba(X)[0]
+def predict_match(model, feature_names, home, away, state, cf, stage, date,
+                  neutral=True, is_home=False, odds=None,
+                  poisson_model=None, alpha=1.0):
+    """Predict a single match. Returns (predicted_label_idx, probs[3]).
+
+    Blends the (calibrated) XGBoost probabilities with the Dixon-Coles Poisson
+    member when one is supplied, then applies the knockout draw-renormalization.
+    """
+    odds_row = odds_features_for_match(odds, date, home, away)
+    feat = compute_match_features(home, away, state, cf, stage, date,
+                                  neutral=neutral, is_home=is_home, odds_row=odds_row)
+    X = prepare_prediction_frame(feat, feature_names)
+    probs = np.asarray(model.predict_proba(X)[0], dtype=float)
+
+    if poisson_model is not None and alpha < 1.0:
+        p_pois = poisson_model.outcome_probs(home, away, neutral=neutral)
+        probs = blend_probabilities(probs, p_pois, alpha)
 
     # Knockout: renormalize away the draw probability.
     if stage > 0:
@@ -188,10 +256,14 @@ def run_backtest():
     # Load data
     results_df = pd.read_csv(DATA_DIR / "results.csv")
     country_history = load_country_feature_history()
+    odds = load_betting_odds()
+    print(f"Loaded bookmaker odds for {len(odds) // 2} fixtures.")
 
     # Train model on all pre-2026-WC data
     print("Training model on historical data (excluding 2026 WC)...")
-    model, state, feature_names = train_model(results_df, country_history)
+    model, state, feature_names, poisson_model, alpha = train_model(
+        results_df, country_history, odds=odds,
+    )
     print(f"  Trained on {sum(1 for _, r in results_df.iterrows() if r['home_score'] == r['home_score'])} matches")
     print()
 
@@ -233,6 +305,7 @@ def run_backtest():
         predicted_idx, probs = predict_match(
             model, feature_names, home, away, state, cf, stage, date,
             neutral=neutral, is_home=is_home,
+            odds=odds, poisson_model=poisson_model, alpha=alpha,
         )
         actual_idx = actual_result(hs, aw)
 

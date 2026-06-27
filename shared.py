@@ -64,6 +64,18 @@ COUNTRY_FEATURE_COLUMNS = [
     "football_tradition",
 ]
 
+# Betting-odds derived features merged onto matches that have bookmaker odds.
+# Matches without odds get NaN for every column (XGBoost handles missing values
+# natively, so no imputation is required). ``odds_overround`` is the bookmaker
+# margin (sum of implied probabilities minus 1); a useful signal of how confident
+# / liquid the market was on a given fixture.
+ODDS_FEATURE_COLUMNS = [
+    "implied_home_prob",
+    "implied_draw_prob",
+    "implied_away_prob",
+    "odds_overround",
+]
+
 GROUP_2026_TEAMS = {
     "A": ["Mexico", "South Africa", "Korea Republic", "Czech Republic"],
     "B": ["Canada", "Bosnia and Herzegovina", "Qatar", "Switzerland"],
@@ -380,7 +392,7 @@ def _matches_in_window(state_entry, match_date, days: int) -> int:
     return count
 
 
-def compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False):
+def compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False, odds_row=None):
     s, o = state[team], state[opponent]
     form = s["form"][-10:] if s["form"] else [0.5]
     opp_form = o["form"][-10:] if o["form"] else [0.5]
@@ -433,6 +445,11 @@ def compute_match_features(team, opponent, state, country_features, stage_num, m
                                  + np.mean(o["goals_against"][-5:] or [0])) / 2.0
     low_scoring_indicator = 1.0 / (1.0 + expected_total_goals)
 
+    # 6. Bookmaker implied probabilities (single best predictor in the football
+    #    literature). NaN when the match has no odds; XGBoost handles missing.
+    if odds_row is None:
+        odds_row = {col: np.nan for col in ODDS_FEATURE_COLUMNS}
+
     return {
         "elo": s["elo"], "elo_opponent": o["elo"],
         "elo_diff": elo_diff, "elo_sum": s["elo"] + o["elo"],
@@ -478,7 +495,45 @@ def compute_match_features(team, opponent, state, country_features, stage_num, m
         "combined_draw_rate": combined_draw_rate,
         "expected_total_goals": expected_total_goals,
         "low_scoring_indicator": low_scoring_indicator,
+        # ── Bookmaker implied probabilities (NaN when no odds available) ──
+        "implied_home_prob": odds_row.get("implied_home_prob", np.nan),
+        "implied_draw_prob": odds_row.get("implied_draw_prob", np.nan),
+        "implied_away_prob": odds_row.get("implied_away_prob", np.nan),
+        "odds_overround": odds_row.get("odds_overround", np.nan),
     }
+
+
+def finalize_feature_frame(rows: Sequence[dict]) -> pd.DataFrame:
+    """Turn feature dicts into a model-ready frame.
+
+    Non-odds columns are filled with 0 (the historical behaviour), but the
+    bookmaker-odds columns are *deliberately left as NaN* when missing so that
+    XGBoost can learn a dedicated "missing odds" split instead of treating an
+    absent market as a 0% implied probability. ``predict_proba`` at inference
+    time must use the same convention (see ``prepare_prediction_frame``).
+    """
+    X = pd.DataFrame(rows)
+    non_odds = [c for c in X.columns if c not in ODDS_FEATURE_COLUMNS]
+    if non_odds:
+        X[non_odds] = X[non_odds].fillna(0)
+    return X
+
+
+def prepare_prediction_frame(feat: dict, feature_names: Sequence[str]) -> pd.DataFrame:
+    """Build a single-row frame aligned to ``feature_names`` for prediction.
+
+    Mirrors :func:`finalize_feature_frame`: odds columns keep their NaN so the
+    model sees the same missing-value encoding it was trained on.
+    """
+    X = pd.DataFrame([feat])
+    for name in feature_names:
+        if name not in X.columns:
+            X[name] = np.nan
+    X = X[list(feature_names)]
+    non_odds = [c for c in X.columns if c not in ODDS_FEATURE_COLUMNS]
+    if non_odds:
+        X[non_odds] = X[non_odds].fillna(0)
+    return X
 
 
 def parse_bool(value: object) -> bool:
@@ -487,6 +542,90 @@ def parse_bool(value: object) -> bool:
     if pd.isna(value):
         return False
     return str(value).strip().lower() in {"true", "1", "yes", "y", "t"}
+
+
+def _odds_key(date, home: str, away: str) -> Tuple[str, str, str]:
+    """Build the merge key used to attach bookmaker odds to a match.
+
+    Keyed by (ISO date string, canonical home, canonical away) so the lookup is
+    robust to the various name spellings used in the odds source.
+    """
+    try:
+        date_str = pd.to_datetime(date).strftime("%Y-%m-%d")
+    except Exception:
+        date_str = str(date)
+    return (date_str, harmonize_country(home), harmonize_country(away))
+
+
+def load_betting_odds(
+    path: Path = DATA_DIR / "betting_odds.csv",
+) -> Dict[Tuple[str, str, str], Dict[str, float]]:
+    """Load bookmaker implied probabilities keyed by (date, home, away).
+
+    Returns a mapping from ``(date, canonical_home, canonical_away)`` to the
+    ``ODDS_FEATURE_COLUMNS`` values. ``odds_overround`` is derived from the three
+    implied probabilities (their sum minus 1). The orientation-swapped key is also
+    stored (with home/away implied probs flipped) so a match recorded in the
+    opposite orientation still finds its odds.
+
+    Missing/unparseable files yield an empty mapping, so callers degrade
+    gracefully to "no odds" (all-NaN) rather than crashing.
+    """
+    odds: Dict[Tuple[str, str, str], Dict[str, float]] = {}
+    if not Path(path).exists():
+        return odds
+    try:
+        df = pd.read_csv(path)
+    except Exception:
+        return odds
+
+    required = {"date", "home_team", "away_team",
+                "implied_home_prob", "implied_draw_prob", "implied_away_prob"}
+    if not required.issubset(df.columns):
+        return odds
+
+    for _, row in df.iterrows():
+        try:
+            ph = float(row["implied_home_prob"])
+            pd_ = float(row["implied_draw_prob"])
+            pa = float(row["implied_away_prob"])
+        except (TypeError, ValueError):
+            continue
+        if not all(np.isfinite([ph, pd_, pa])):
+            continue
+        overround = ph + pd_ + pa - 1.0
+        forward = {
+            "implied_home_prob": ph,
+            "implied_draw_prob": pd_,
+            "implied_away_prob": pa,
+            "odds_overround": overround,
+        }
+        reverse = {
+            "implied_home_prob": pa,
+            "implied_draw_prob": pd_,
+            "implied_away_prob": ph,
+            "odds_overround": overround,
+        }
+        key = _odds_key(row["date"], row["home_team"], row["away_team"])
+        # Forward orientation takes precedence; only add the swapped orientation
+        # if that exact (date, home, away) pair is not already populated.
+        odds.setdefault(key, forward)
+        swapped = (key[0], key[2], key[1])
+        odds.setdefault(swapped, reverse)
+    return odds
+
+
+def odds_features_for_match(
+    odds: Optional[Dict[Tuple[str, str, str], Dict[str, float]]],
+    date,
+    home: str,
+    away: str,
+) -> Dict[str, float]:
+    """Return the odds feature dict for a match, or all-NaN when unavailable."""
+    nan_row = {col: np.nan for col in ODDS_FEATURE_COLUMNS}
+    if not odds:
+        return nan_row
+    return dict(odds.get(_odds_key(date, home, away), nan_row))
 
 
 def load_country_feature_history(
@@ -612,8 +751,106 @@ def infer_world_cup_stage_map(results_df: pd.DataFrame) -> Dict[int, int]:
     return stage_by_index
 
 
-def fit_xgb_with_validation(model, X: pd.DataFrame, y: np.ndarray, label: str = "model", dates: Sequence | None = None):
-    """Fit an XGBoost classifier and report a chronological holdout when dates are available."""
+# Half-life (in days) for recency weighting of training rows. A 4-year half-life
+# means a friendly from 4 years ago counts half as much as a match today, so the
+# model leans on recent squad/era information without discarding deep history.
+TIME_DECAY_HALF_LIFE_DAYS = 365 * 4
+
+# Multiplier applied to draw rows (label == 1) so the softmax stops collapsing
+# draws into home wins (the model's documented weakness). Combined with isotonic
+# calibration, this targets log-loss/Brier on the under-predicted draw class.
+DRAW_CLASS_WEIGHT = 1.6
+
+
+def time_decay_weights(dates: Sequence, half_life_days: int = TIME_DECAY_HALF_LIFE_DAYS) -> np.ndarray:
+    """Recency weights ``0.5 ** (age_days / half_life_days)`` for each row."""
+    d = pd.to_datetime(pd.Series(list(dates)), errors="coerce")
+    max_date = d.max()
+    age_days = (max_date - d).dt.days.fillna(0).clip(lower=0)
+    return np.asarray(0.5 ** (age_days / float(half_life_days)), dtype=float)
+
+
+def sample_weights(
+    y: np.ndarray,
+    dates: Sequence | None = None,
+    *,
+    time_decay: bool = True,
+    draw_weight: float = DRAW_CLASS_WEIGHT,
+) -> np.ndarray:
+    """Combine recency decay and draw up-weighting into one sample-weight vector."""
+    y = np.asarray(y)
+    w = np.ones(len(y), dtype=float)
+    if time_decay and dates is not None and len(dates) == len(y):
+        w = w * time_decay_weights(dates)
+    if draw_weight and draw_weight != 1.0:
+        w = w * np.where(y == 1, draw_weight, 1.0)
+    return w
+
+
+class IsotonicProbabilityCalibrator:
+    """Per-class isotonic recalibration of a fitted multiclass classifier.
+
+    ``CalibratedClassifierCV(method="isotonic", cv="prefit")`` is the canonical
+    tool, but it refits on the whole validation set and does not always preserve
+    the exact 3-class ordering the rest of the pipeline assumes. This thin wrapper
+    fits one ``IsotonicRegression`` per class on the chronological holdout, then
+    renormalizes, which keeps the [home, draw, away] column order intact and lets
+    callers keep using ``predict_proba``/``predict`` unchanged.
+    """
+
+    def __init__(self, base_model, classes):
+        self.base_model = base_model
+        self.classes_ = np.asarray(classes)
+        self._iso = {}
+
+    def fit(self, X_val, y_val, sample_weight=None):
+        from sklearn.isotonic import IsotonicRegression
+
+        probs = self.base_model.predict_proba(X_val)
+        y_val = np.asarray(y_val)
+        for j, cls in enumerate(self.classes_):
+            target = (y_val == cls).astype(float)
+            iso = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
+            try:
+                iso.fit(probs[:, j], target, sample_weight=sample_weight)
+                self._iso[j] = iso
+            except Exception:
+                self._iso[j] = None
+        return self
+
+    def predict_proba(self, X):
+        probs = np.asarray(self.base_model.predict_proba(X), dtype=float)
+        out = np.empty_like(probs)
+        for j in range(probs.shape[1]):
+            iso = self._iso.get(j)
+            out[:, j] = iso.predict(probs[:, j]) if iso is not None else probs[:, j]
+        row_sums = out.sum(axis=1, keepdims=True)
+        row_sums[row_sums == 0] = 1.0
+        return out / row_sums
+
+    def predict(self, X):
+        return self.classes_[np.argmax(self.predict_proba(X), axis=1)]
+
+
+def fit_xgb_with_validation(
+    model,
+    X: pd.DataFrame,
+    y: np.ndarray,
+    label: str = "model",
+    dates: Sequence | None = None,
+    sample_weight: Sequence | None = None,
+    calibrate: bool = False,
+):
+    """Fit an XGBoost classifier and report a chronological holdout when dates are available.
+
+    When ``sample_weight`` is provided it is applied to the training split (and
+    the early-stopping eval set), so time-decay and draw up-weighting flow into
+    the fit. When ``calibrate=True`` the fitted model is wrapped in an isotonic
+    calibrator fitted on the chronological holdout; the returned object still
+    exposes ``predict``/``predict_proba`` and the original estimator stays
+    available as ``.base_model``.
+    """
+    sw = np.asarray(sample_weight, dtype=float) if sample_weight is not None else None
     if dates is not None and len(dates) == len(X):
         order = pd.Series(pd.to_datetime(dates, errors="coerce")).sort_values().index
         split = max(1, int(len(order) * 0.8))
@@ -622,14 +859,27 @@ def fit_xgb_with_validation(model, X: pd.DataFrame, y: np.ndarray, label: str = 
         train_idx, val_idx = order[:split], order[split:]
         X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
         y_train, y_val = y[train_idx], y[val_idx]
+        sw_train = sw[train_idx] if sw is not None else None
+        sw_val = sw[val_idx] if sw is not None else None
         split_label = "chronological holdout"
     else:
         stratify = y if min(np.bincount(y.astype(int))) >= 2 else None
-        X_train, X_val, y_train, y_val = train_test_split(
-            X, y, test_size=0.2, random_state=42, stratify=stratify
-        )
+        if sw is not None:
+            idx = np.arange(len(X))
+            tr, va = train_test_split(idx, test_size=0.2, random_state=42, stratify=stratify)
+            X_train, X_val = X.iloc[tr], X.iloc[va]
+            y_train, y_val = y[tr], y[va]
+            sw_train, sw_val = sw[tr], sw[va]
+        else:
+            X_train, X_val, y_train, y_val = train_test_split(
+                X, y, test_size=0.2, random_state=42, stratify=stratify
+            )
+            sw_train = sw_val = None
         split_label = "random holdout"
+
     fit_kwargs = {"eval_set": [(X_val, y_val)], "verbose": False}
+    if sw_train is not None:
+        fit_kwargs["sample_weight"] = sw_train
     try:
         model.fit(X_train, y_train, early_stopping_rounds=30, **fit_kwargs)
     except TypeError:
@@ -637,15 +887,222 @@ def fit_xgb_with_validation(model, X: pd.DataFrame, y: np.ndarray, label: str = 
             model.set_params(early_stopping_rounds=30)
             model.fit(X_train, y_train, **fit_kwargs)
         except TypeError:
-            model.fit(X_train, y_train)
+            if sw_train is not None:
+                model.fit(X_train, y_train, sample_weight=sw_train)
+            else:
+                model.fit(X_train, y_train)
 
-    val_probs = model.predict_proba(X_val)
+    estimator = model
+    if calibrate:
+        classes = getattr(model, "classes_", np.array(sorted(np.unique(y).astype(int).tolist())))
+        try:
+            estimator = IsotonicProbabilityCalibrator(model, classes).fit(X_val, y_val, sample_weight=sw_val)
+        except Exception as exc:  # pragma: no cover - calibration is best-effort
+            print(f"  {label} calibration failed ({exc}); using uncalibrated model")
+            estimator = model
+
+    val_probs = estimator.predict_proba(X_val)
     val_pred = np.argmax(val_probs, axis=1)
     labels = sorted(np.unique(y).astype(int).tolist())
     acc = accuracy_score(y_val, val_pred)
     loss = log_loss(y_val, val_probs, labels=labels)
-    print(f"  {label} {split_label} accuracy={acc:.3f}, log-loss={loss:.3f} ({len(X_val)} matches)")
-    return model, {"accuracy": float(acc), "log_loss": float(loss), "n_val": int(len(X_val)), "split": split_label}
+    cal_tag = " (isotonic-calibrated)" if calibrate else ""
+    print(f"  {label} {split_label}{cal_tag} accuracy={acc:.3f}, log-loss={loss:.3f} ({len(X_val)} matches)")
+    return estimator, {"accuracy": float(acc), "log_loss": float(loss), "n_val": int(len(X_val)), "split": split_label}
+
+
+class DixonColesModel:
+    """Dixon-Coles bivariate-Poisson goal model.
+
+    Estimates per-team attack/defense strengths plus a global home advantage and
+    a low-score dependence parameter ``rho``. W/D/L probabilities come from a
+    truncated scoreline grid, which naturally produces realistic *draw* rates
+    (the XGBoost model's documented weakness). Strengths are fit by weighted
+    Poisson MLE; recent matches are up-weighted via the shared time-decay.
+    """
+
+    def __init__(self, attack, defense, home_adv, rho, base, teams):
+        self.attack = attack
+        self.defense = defense
+        self.home_adv = float(home_adv)
+        self.rho = float(rho)
+        self.base = float(base)
+        self.teams = set(teams)
+
+    def _lambdas(self, home: str, away: str, neutral: bool = True):
+        home = harmonize_country(home)
+        away = harmonize_country(away)
+        ah = self.attack.get(home, 0.0)
+        dh = self.defense.get(home, 0.0)
+        aa = self.attack.get(away, 0.0)
+        da = self.defense.get(away, 0.0)
+        adv = 0.0 if neutral else self.home_adv
+        lam_home = np.exp(self.base + adv + ah - da)
+        lam_away = np.exp(self.base + aa - dh)
+        # Guard against pathological strengths producing huge expected goals.
+        return float(np.clip(lam_home, 1e-3, 8.0)), float(np.clip(lam_away, 1e-3, 8.0))
+
+    @staticmethod
+    def _tau(i, j, lam, mu, rho):
+        if i == 0 and j == 0:
+            return 1.0 - lam * mu * rho
+        if i == 0 and j == 1:
+            return 1.0 + lam * rho
+        if i == 1 and j == 0:
+            return 1.0 + mu * rho
+        if i == 1 and j == 1:
+            return 1.0 - rho
+        return 1.0
+
+    def outcome_probs(self, home: str, away: str, neutral: bool = True, max_goals: int = 10) -> np.ndarray:
+        """Return [P(home win), P(draw), P(away win)] from the scoreline grid."""
+        lam, mu = self._lambdas(home, away, neutral)
+        i = np.arange(0, max_goals + 1)
+        # Poisson PMFs.
+        from math import lgamma
+
+        log_fact = np.array([lgamma(k + 1) for k in i])
+        ph = np.exp(i * np.log(lam) - lam - log_fact)
+        pa = np.exp(i * np.log(mu) - mu - log_fact)
+        grid = np.outer(ph, pa)
+        # Dixon-Coles low-score correction on the four 0/1 cells.
+        for a in (0, 1):
+            for b in (0, 1):
+                grid[a, b] *= self._tau(a, b, lam, mu, self.rho)
+        grid = np.clip(grid, 0.0, None)
+        total = grid.sum()
+        if total <= 0:
+            return np.array([1 / 3, 1 / 3, 1 / 3])
+        grid /= total
+        p_home = np.tril(grid, -1).sum()   # home goals > away goals
+        p_away = np.triu(grid, 1).sum()    # away goals > home goals
+        p_draw = np.trace(grid)
+        return np.array([p_home, p_draw, p_away])
+
+
+def fit_dixon_coles(
+    results_df: pd.DataFrame,
+    *,
+    max_year: int | None = None,
+    half_life_days: int = TIME_DECAY_HALF_LIFE_DAYS,
+    min_matches: int = 8,
+    exclude_2026_wc: bool = True,
+) -> "DixonColesModel":
+    """Fit a Dixon-Coles model by weighted Poisson MLE on historical results.
+
+    Falls back to a closed-form attack/defense estimate (no ``rho``) when SciPy
+    is unavailable, so the ensemble still works without the optional dependency.
+    """
+    try:
+        from scipy.optimize import minimize
+        _have_scipy = True
+    except Exception:
+        minimize = None
+        _have_scipy = False
+
+    df = harmonize_columns(results_df.copy(), ["home_team", "away_team"])
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    if exclude_2026_wc:
+        df = df[~((df["date"].dt.year == 2026) & (df["tournament"] == "FIFA World Cup"))]
+    df = df.dropna(subset=["home_score", "away_score", "date"])
+    if max_year is not None:
+        df = df[df["date"].dt.year <= max_year]
+    # Keep recent history meaningful; ~last 12 years covers several WC cycles
+    # while keeping the parameter count (2 * n_teams + 3) tractable for L-BFGS-B.
+    cutoff = df["date"].max() - pd.Timedelta(days=365 * 12)
+    df = df[df["date"] >= cutoff].copy()
+
+    counts = pd.concat([df["home_team"], df["away_team"]]).value_counts()
+    teams = sorted(counts[counts >= min_matches].index.tolist())
+    df = df[df["home_team"].isin(teams) & df["away_team"].isin(teams)].reset_index(drop=True)
+    if df.empty or len(teams) < 2:
+        return DixonColesModel({}, {}, 0.0, 0.0, 0.0, teams)
+
+    idx = {t: k for k, t in enumerate(teams)}
+    hi = df["home_team"].map(idx).to_numpy()
+    ai = df["away_team"].map(idx).to_numpy()
+    hg = df["home_score"].to_numpy(dtype=float)
+    ag = df["away_score"].to_numpy(dtype=float)
+    neutral = df.get("neutral")
+    is_neutral = (neutral.map(parse_bool).to_numpy() if neutral is not None
+                  else np.ones(len(df), dtype=bool))
+    w = time_decay_weights(df["date"], half_life_days)
+
+    n = len(teams)
+
+    if not _have_scipy:
+        # Closed-form weighted estimate: attack ~ log(weighted GF / mean), and
+        # defense ~ -log(weighted GA / mean). No low-score (rho) correction.
+        gf_sum = np.zeros(n); ga_sum = np.zeros(n); wt = np.zeros(n)
+        for k in range(len(df)):
+            gf_sum[hi[k]] += w[k] * hg[k]; ga_sum[hi[k]] += w[k] * ag[k]; wt[hi[k]] += w[k]
+            gf_sum[ai[k]] += w[k] * ag[k]; ga_sum[ai[k]] += w[k] * hg[k]; wt[ai[k]] += w[k]
+        wt = np.clip(wt, 1e-9, None)
+        gf_rate = gf_sum / wt
+        ga_rate = ga_sum / wt
+        base = float(np.log(np.clip(np.average(gf_rate, weights=wt), 1e-3, None)))
+        attack = np.log(np.clip(gf_rate, 1e-3, None)) - base
+        attack = attack - attack.mean()
+        defense = -(np.log(np.clip(ga_rate, 1e-3, None)) - base)
+        defense = defense - defense.mean()
+        home_adv = float(np.log(np.clip(hg.mean(), 1e-3, None) / np.clip(ag.mean(), 1e-3, None)))
+        return DixonColesModel(
+            attack={t: float(attack[idx[t]]) for t in teams},
+            defense={t: float(defense[idx[t]]) for t in teams},
+            home_adv=max(0.0, home_adv), rho=0.0, base=base, teams=teams,
+        )
+    # Params: attack[n], defense[n], home_adv, rho, base. Identifiability: mean
+    # attack fixed to 0 via a soft penalty.
+    def unpack(p):
+        return p[:n], p[n:2 * n], p[2 * n], p[2 * n + 1], p[2 * n + 2]
+
+    def neg_log_like(p):
+        attack, defense, home_adv, rho, base = unpack(p)
+        adv = np.where(is_neutral, 0.0, home_adv)
+        log_lh = base + adv + attack[hi] - defense[ai]
+        log_la = base + attack[ai] - defense[hi]
+        lam = np.exp(np.clip(log_lh, -4, 3))
+        mu = np.exp(np.clip(log_la, -4, 3))
+        ll = hg * np.log(lam) - lam + ag * np.log(mu) - mu
+        # Dixon-Coles low-score correction (vectorized over the 0/1 cells).
+        tau = np.ones(len(df))
+        m00 = (hg == 0) & (ag == 0)
+        m01 = (hg == 0) & (ag == 1)
+        m10 = (hg == 1) & (ag == 0)
+        m11 = (hg == 1) & (ag == 1)
+        tau[m00] = 1.0 - lam[m00] * mu[m00] * rho
+        tau[m01] = 1.0 + lam[m01] * rho
+        tau[m10] = 1.0 + mu[m10] * rho
+        tau[m11] = 1.0 - rho
+        tau = np.clip(tau, 1e-6, None)
+        ll = ll + np.log(tau)
+        penalty = 1e3 * (attack.mean() ** 2)  # anchor mean attack at 0
+        return -np.sum(w * ll) + penalty
+
+    p0 = np.zeros(2 * n + 3)
+    p0[2 * n] = 0.25   # home advantage
+    p0[2 * n + 1] = -0.05  # rho
+    p0[2 * n + 2] = 0.0    # base
+    bounds = [(-3, 3)] * (2 * n) + [(-1.0, 1.0), (-0.2, 0.2), (-2.0, 2.0)]
+    try:
+        res = minimize(neg_log_like, p0, method="L-BFGS-B", bounds=bounds,
+                       options={"maxiter": 200})
+        p = res.x
+    except Exception:
+        p = p0
+    attack, defense, home_adv, rho, base = unpack(p)
+    return DixonColesModel(
+        attack={t: float(attack[idx[t]]) for t in teams},
+        defense={t: float(defense[idx[t]]) for t in teams},
+        home_adv=float(home_adv), rho=float(rho), base=float(base), teams=teams,
+    )
+
+
+def blend_probabilities(p_xgb: np.ndarray, p_poisson: np.ndarray, alpha: float) -> np.ndarray:
+    """Convex blend ``alpha * xgb + (1 - alpha) * poisson``, renormalized."""
+    p = alpha * np.asarray(p_xgb, dtype=float) + (1.0 - alpha) * np.asarray(p_poisson, dtype=float)
+    p = np.clip(p, 1e-12, None)
+    return p / p.sum()
 
 
 def empty_group_table() -> Dict[str, Dict[str, int]]:
