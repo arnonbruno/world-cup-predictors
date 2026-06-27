@@ -4,7 +4,7 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 ## 2026 World Cup Prediction
 
-> **Prediction made: June 27, 2026**
+> **Prediction updated: June 27, 2026**
 
 | Place | Team | Probability |
 |-------|------|-------------|
@@ -13,9 +13,27 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 | 🥉 Third | **Brazil** | 71.3% (vs France) |
 | 4th | **France** | — |
 
+**Corrected Round of 32 bracket:**
+- Match 73: South Africa vs Canada
+- Match 74: Germany vs Paraguay
+- Match 75: Netherlands vs Morocco
+- Match 76: Brazil vs Japan
+- Match 77: France vs Sweden
+- Match 78: Côte d'Ivoire vs Norway
+- Match 79: Mexico vs Ecuador
+- Match 80: England vs Austria
+- Match 81: USA vs Bosnia and Herzegovina
+- Match 82: Belgium vs Korea Republic
+- Match 83: Portugal vs Croatia
+- Match 84: Spain vs Algeria
+- Match 85: Switzerland vs IR Iran
+- Match 86: Argentina vs Cape Verde
+- Match 87: Colombia vs Ghana
+- Match 88: Australia vs Egypt
+
 **Path to the final:**
-- Argentina: Algeria ✅ → Austria ✅ → Colombia (QF) → Brazil (SF, 51.7%) → Spain (Final, 70.5%)
-- Spain: Saudi Arabia ✅ → Croatia ✅ → Belgium (QF) → France (SF, 55.6%) → Argentina (Final)
+- Argentina: Cape Verde ✅ → Australia/Egypt path → Colombia/Switzerland path → Brazil (SF, 51.7%) → Spain (Final, 70.5%)
+- Spain: Algeria ✅ → Portugal/Croatia path → Belgium/USA path → France (SF, 55.6%) → Argentina (Final)
 - Brazil: Japan (R32) → Norway (R16) → England (QF, 73.6%) → Argentina (SF, 48.3%) → France (3rd place)
 
 ## How It Works

@@ -152,6 +152,16 @@ THIRD_SLOT_ALLOWED_GROUPS = {
     25: set("EFGIJ"),  # 1B vs third from E/F/G/I/J
     29: set("DEIJL"),  # 1K vs third from D/E/I/J/L
 }
+THIRD_SLOT_CANDIDATE_ORDER = {
+    3: "DCABF",
+    9: "HCDFG",
+    13: "ECFHI",
+    15: "EHIJK",
+    17: "BEFIJ",
+    19: "AHEIJ",
+    25: "GEFIJ",
+    29: "LDEIJ",
+}
 THIRD_SLOTS = [3, 9, 13, 15, 17, 19, 25, 29]
 INITIAL_ELO = 1500
 K_FACTOR = 32
@@ -199,7 +209,9 @@ def _third_place_assignment_for_combo(groups: Sequence[str]) -> Dict[str, int]:
                 THIRD_SLOTS.index(s),
             ),
         )
-        candidates = sorted(THIRD_SLOT_ALLOWED_GROUPS[slot] & available)
+        allowed = THIRD_SLOT_ALLOWED_GROUPS[slot] & available
+        order = THIRD_SLOT_CANDIDATE_ORDER[slot]
+        candidates = [group for group in order if group in allowed]
         for group in candidates:
             assignment[group] = slot
             if search([s for s in open_slots if s != slot], available - {group}):

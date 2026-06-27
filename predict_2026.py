@@ -476,14 +476,14 @@ def main():
     # r32 indices: 0=73, 1=74, 2=75, 3=76, 4=77, 5=78, 6=79, 7=80,
     #              8=81, 9=82, 10=83, 11=84, 12=85, 13=86, 14=87, 15=88
     r16 = [
-        ('R16 M89', r32_w[0], r32_w[2]),   # W73 vs W75  (Canada vs Netherlands)
-        ('R16 M90', r32_w[1], r32_w[4]),   # W74 vs W77  (Germany vs France)
-        ('R16 M91', r32_w[3], r32_w[5]),   # W76 vs W78  (Brazil vs Norway)
-        ('R16 M92', r32_w[6], r32_w[7]),   # W79 vs W80  (Mexico vs England)
-        ('R16 M93', r32_w[10], r32_w[11]), # W83 vs W84  (Colombia vs Spain)
-        ('R16 M94', r32_w[8], r32_w[9]),   # W81 vs W82  (USA vs IR Iran)
-        ('R16 M95', r32_w[13], r32_w[15]), # W86 vs W88  (Argentina vs Belgium)
-        ('R16 M96', r32_w[12], r32_w[14]), # W85 vs W87  (Switzerland vs Portugal)
+        ('R16 M89', r32_w[0], r32_w[2]),   # W73 vs W75
+        ('R16 M90', r32_w[1], r32_w[4]),   # W74 vs W77
+        ('R16 M91', r32_w[3], r32_w[5]),   # W76 vs W78
+        ('R16 M92', r32_w[6], r32_w[7]),   # W79 vs W80
+        ('R16 M93', r32_w[10], r32_w[11]), # W83 vs W84
+        ('R16 M94', r32_w[8], r32_w[9]),   # W81 vs W82
+        ('R16 M95', r32_w[13], r32_w[15]), # W86 vs W88
+        ('R16 M96', r32_w[12], r32_w[14]), # W85 vs W87
     ]
     r16_w = simulate_round(r16, "ROUND OF 16", WC2026_STAGE_TO_TRAIN["round_of_16"], state, model, fl, cf, pd.Timestamp('2026-07-04'), debug=args.debug)
     
