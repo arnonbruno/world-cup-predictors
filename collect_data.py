@@ -23,6 +23,8 @@ import numpy as np
 import requests
 from bs4 import BeautifulSoup
 
+from shared import harmonize_country
+
 warnings.filterwarnings('ignore')
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
@@ -65,26 +67,26 @@ COUNTRY_TO_ISO3 = {
     'Colombia': 'COL', 'Costa Rica': 'CRC', 'Croatia': 'HRV',
     'Cuba': 'CUB', 'Czech Republic': 'CZE', 'Czechoslovakia': 'CZE',
     'Denmark': 'DEN', 'Ecuador': 'ECU', 'Egypt': 'EGY',
-    'El Salvador': 'SLV', 'England': 'GBR', 'France': 'FRA',
+    'El Salvador': 'SLV', 'England': 'ENG', 'France': 'FRA',
     'Germany': 'DEU', 'Ghana': 'GHA', 'Greece': 'GRC',
-    'Honduras': 'HUN', 'Hungary': 'HUN', 'Iceland': 'ISL',
-    'Indonesia': 'IDN', 'Iran': 'IRN', 'Iraq': 'IRQ',
+    'Honduras': 'HND', 'Hungary': 'HUN', 'Iceland': 'ISL',
+    'Indonesia': 'IDN', 'Iran': 'IRN', 'IR Iran': 'IRN', 'Iraq': 'IRQ',
     'Ireland': 'IRL', 'Israel': 'ISR', 'Italy': 'ITA',
     'Ivory Coast': 'CIV', 'Jamaica': 'JAM', 'Japan': 'JPN',
     'Kuwait': 'KWT', 'Mexico': 'MEX', 'Morocco': 'MAR',
     'Netherlands': 'NLD', 'New Zealand': 'NZL', 'Nigeria': 'NGA',
-    'North Korea': 'PRK', 'Northern Ireland': 'GBR', 'Norway': 'NOR',
+    'North Korea': 'PRK', 'Korea DPR': 'PRK', 'Northern Ireland': 'NIR', 'Norway': 'NOR',
     'Panama': 'PAN', 'Paraguay': 'PRY', 'Peru': 'PER',
     'Poland': 'POL', 'Portugal': 'PRT', 'Qatar': 'QAT',
     'Romania': 'ROU', 'Russia': 'RUS', 'Saudi Arabia': 'SAU',
-    'Scotland': 'GBR', 'Senegal': 'SEN', 'Serbia': 'SRB',
+    'Scotland': 'SCO', 'Senegal': 'SEN', 'Serbia': 'SRB',
     'Serbia and Montenegro': 'SRB', 'Slovakia': 'SVK',
     'Slovenia': 'SVN', 'South Africa': 'ZAF',
-    'South Korea': 'KOR', 'Soviet Union': 'RUS', 'Spain': 'ESP',
+    'South Korea': 'KOR', 'Korea Republic': 'KOR', 'Soviet Union': 'RUS', 'Spain': 'ESP',
     'Sweden': 'SWE', 'Switzerland': 'CHE', 'Togo': 'TGO',
     'Trinidad and Tobago': 'TTO', 'Tunisia': 'TUN',
     'Turkey': 'TUR', 'UAE': 'ARE', 'Ukraine': 'UKR',
-    'United States': 'USA', 'Uruguay': 'URY', 'Wales': 'GBR',
+    'United States': 'USA', 'USA': 'USA', 'Uruguay': 'URY', 'Wales': 'WAL',
     'West Germany': 'DEU', 'Yugoslavia': 'SRB',
     'Zaire': 'COD', 'East Germany': 'DEU',
     'South Korea/Japan': 'KOR',  # host entry
@@ -93,6 +95,8 @@ COUNTRY_TO_ISO3 = {
     'Haiti': 'HTI', 'Jamaica': 'JAM', 'China PR': 'CHN',
     'IR Iran': 'IRN', 'Korea Republic': 'KOR',
     'Côte d\'Ivoire': 'CIV',
+    'Cape Verde': 'CPV', 'Curaçao': 'CUW', 'Curacao': 'CUW',
+    'Uzbekistan': 'UZB', 'Jordan': 'JOR',
 }
 
 # All World Cup participants by year (comprehensive list)
@@ -148,11 +152,29 @@ WC_SEMIFINALISTS = {
     2018: ['Belgium','England'], 2022: ['Croatia','Morocco'],
 }
 
+def _canonicalize_host(host):
+    if "/" in host:
+        return [harmonize_country(part) for part in host.split("/")]
+    return [harmonize_country(host)]
+
+
+WC_WINNERS = {year: harmonize_country(team) for year, team in WC_WINNERS.items()}
+WC_RUNNERS_UP = {year: harmonize_country(team) for year, team in WC_RUNNERS_UP.items()}
+WC_SEMIFINALISTS = {
+    year: [harmonize_country(team) for team in teams]
+    for year, teams in WC_SEMIFINALISTS.items()
+}
+WC_PARTICIPANTS = {
+    year: sorted({harmonize_country(team) for team in teams})
+    for year, teams in WC_PARTICIPANTS.items()
+}
+WC_HOSTS = {year: _canonicalize_host(host) for year, host in WC_HOSTS.items()}
+
 WC_YEARS = sorted(WC_WINNERS.keys())
 
 def get_iso3(country_name):
     """Map country name to ISO3 code."""
-    return COUNTRY_TO_ISO3.get(country_name, None)
+    return COUNTRY_TO_ISO3.get(harmonize_country(country_name), None)
 
 
 # ============================================================
@@ -401,9 +423,10 @@ def build_dataset(wb_data, wc_meta):
         meta = wc_meta.get(year, {})
 
         # All countries that participated
-        all_teams = list(set(participants))
+        all_teams = sorted(set(harmonize_country(team) for team in participants))
 
         for team in all_teams:
+            team = harmonize_country(team)
             iso3 = get_iso3(team)
             if iso3 is None:
                 continue
@@ -519,10 +542,9 @@ def build_dataset(wb_data, wc_meta):
                 'football_tradition': 0,
             }
 
-            # Fill World Bank data (with lag: use year-1 for most recent available)
+            # Fill World Bank data using only pre-tournament data (year-1 or earlier).
             if iso3 in wb_data:
-                # Try same year first, then year-1, year-2
-                for lag in [0, 1, 2]:
+                for lag in [1, 2, 3]:
                     data_year = year - lag
                     if data_year in wb_data[iso3]:
                         yr_data = wb_data[iso3][data_year]
@@ -533,7 +555,7 @@ def build_dataset(wb_data, wc_meta):
 
                 # Also get population from any nearby year for ranking
                 if 'population' in row and row['population'] is None:
-                    for nearby in range(year - 3, year + 1):
+                    for nearby in range(year - 3, year):
                         if nearby in wb_data[iso3] and 'population' in wb_data[iso3][nearby]:
                             row['population'] = wb_data[iso3][nearby]['population']
                             break

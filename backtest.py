@@ -3,6 +3,7 @@ World Cup Backtest: Leave-One-World-Cup-Out Predictions
 """
 import pandas as pd
 import numpy as np
+import os
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
@@ -10,14 +11,14 @@ from sklearn.metrics import roc_auc_score, brier_score_loss
 import warnings
 warnings.filterwarnings('ignore')
 
-DATA_DIR = '/var/mnt/DATA/Hermes/workspace/world-cup-predictors/data'
+DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 
 # Actual WC winners by year
 WC_WINNERS = {
     1930: 'Uruguay', 1934: 'Italy', 1938: 'Italy',
-    1950: 'Uruguay', 1954: 'West Germany', 1958: 'Brazil',
+    1950: 'Uruguay', 1954: 'Germany', 1958: 'Brazil',
     1962: 'Brazil', 1966: 'England', 1970: 'Brazil',
-    1974: 'West Germany', 1978: 'Argentina', 1982: 'Italy',
+    1974: 'Germany', 1978: 'Argentina', 1982: 'Italy',
     1986: 'Argentina', 1990: 'Germany', 1994: 'Brazil',
     1998: 'France', 2002: 'Brazil', 2006: 'Italy',
     2010: 'Spain', 2014: 'Germany', 2018: 'France',
@@ -35,7 +36,7 @@ feature_cols = [c for c in df.columns if c not in DROP_COLS + [TARGET, 'wc_year'
 wc_years = sorted(df['wc_year'].unique())
 
 print("="*95)
-print("WORLD CUP WINNER BACKTEST — Leave-One-World-Cup-Out")
+print("WORLD CUP WINNER BACKTEST — Chronological")
 print("="*95)
 print(f"Dataset: {len(df)} rows, {len(feature_cols)} features, {len(wc_years)} WCs")
 print(f"Model: L2 Logistic Regression (C=0.1, balanced class weights)\n")
@@ -48,7 +49,11 @@ for test_year in wc_years:
     actual_winner = WC_WINNERS[test_year]
 
     test_mask = df['wc_year'] == test_year
-    train_mask = ~test_mask
+    train_mask = df['wc_year'] < test_year
+
+    if not train_mask.any():
+        print(f"{test_year} skipped: no prior World Cups available for training")
+        continue
 
     X_train = df.loc[train_mask, feature_cols].values
     y_train = df.loc[train_mask, TARGET].values

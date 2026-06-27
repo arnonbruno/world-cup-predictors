@@ -9,6 +9,19 @@ import numpy as np
 import xgboost as xgb
 from collections import defaultdict, Counter
 import copy, warnings, time
+from shared import (
+    GROUP_2026_TEAMS,
+    apply_group_result,
+    build_2026_group_state,
+    build_round_of_32,
+    compute_match_features,
+    country_features_for_year,
+    fit_xgb_with_validation,
+    harmonize_country,
+    load_country_feature_history,
+    rank_third_place_teams,
+    sorted_group_standings,
+)
 warnings.filterwarnings('ignore')
 
 N_SIMS = 1000
@@ -26,7 +39,7 @@ INITIAL_ELO = 1500
 K_FACTOR = 32
 
 def harmonize(name):
-    return NAME_MAP.get(name, name)
+    return harmonize_country(name)
 
 def expected_score(elo_a, elo_b):
     return 1 / (1 + 10 ** ((elo_b - elo_a) / 400))
@@ -40,48 +53,7 @@ def update_elo(elo_a, elo_b, score_a, score_b, neutral=True):
             elo_b + K_FACTOR * multiplier * ((1 - sa) - (1 - ea)))
 
 def compute_features(team, opponent, state, country_features, stage_num, match_date):
-    s, o = state[team], state[opponent]
-    form = s['form'][-10:] if s['form'] else [0.5]
-    gf5 = s['goals_for'][-5:] or [0]
-    ga5 = s['goals_against'][-5:] or [0]
-    gf10 = s['goals_for'][-10:] or [0]
-    ga10 = s['goals_against'][-10:] or [0]
-    rest = min((match_date - s['last_match']).days if s['last_match'] else 30, 60)
-    h2h_key = tuple(sorted([team, opponent]))
-    h = s['h2h'].get(h2h_key, {'matches': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'gf': 0, 'ga': 0})
-    hm = max(h['matches'], 1)
-    cf, oc = country_features.get(team, {}), country_features.get(opponent, {})
-    return {
-        'elo': s['elo'], 'elo_opponent': o['elo'],
-        'elo_diff': s['elo'] - o['elo'], 'elo_sum': s['elo'] + o['elo'],
-        'form_win_rate': sum(1 for f in form if f == 1) / len(form),
-        'form_draw_rate': sum(1 for f in form if f == 0.5) / len(form),
-        'form_loss_rate': sum(1 for f in form if f == 0) / len(form),
-        'avg_goals_scored_5': np.mean(gf5), 'avg_goals_conceded_5': np.mean(ga5),
-        'avg_goals_scored_10': np.mean(gf10), 'avg_goals_conceded_10': np.mean(ga10),
-        'rest_days': rest,
-        'h2h_matches': h['matches'], 'h2h_win_rate': h['wins'] / hm,
-        'h2h_draw_rate': h['draws'] / hm, 'h2h_avg_goals_for': h['gf'] / hm,
-        'h2h_avg_goals_against': h['ga'] / hm,
-        'wc_participations': s['wc_participations'], 'wc_titles': s['wc_titles'],
-        'wc_win_rate': s['wc_wins'] / max(s['wc_matches'], 1),
-        'stage': stage_num, 'neutral': 1, 'is_home': 0,
-        'gdp_per_capita': cf.get('gdp_per_capita', np.nan),
-        'population': cf.get('population', np.nan),
-        'life_expectancy': cf.get('life_expectancy', np.nan),
-        'urban_population_pct': cf.get('urban_population_pct', np.nan),
-        'health_expenditure_pct_gdp': cf.get('health_expenditure_pct_gdp', np.nan),
-        'elo_pre_tournament': cf.get('elo_rating', s['elo']),
-        'fifa_ranking': cf.get('fifa_ranking', 100),
-        'football_power_index': cf.get('football_power_index', 0),
-        'football_tradition': cf.get('football_tradition', 0),
-        'opp_elo_pre_tournament': oc.get('elo_rating', o['elo']),
-        'opp_football_power_index': oc.get('football_power_index', 0),
-        'opp_football_tradition': oc.get('football_tradition', 0),
-        'elo_diff_pre': cf.get('elo_rating', s['elo']) - oc.get('elo_rating', o['elo']),
-        'power_diff': cf.get('football_power_index', 0) - oc.get('football_power_index', 0),
-        'tradition_diff': cf.get('football_tradition', 0) - oc.get('football_tradition', 0),
-    }
+    return compute_match_features(team, opponent, state, country_features, stage_num, match_date)
 
 def update_state(state, ta, tb, sa, sb, date):
     ha, hb = harmonize(ta), harmonize(tb)
@@ -139,136 +111,33 @@ def sample_group(probs, ta, tb):
     else:
         return tb, 1, 2
 
-# ── Group standings (Belgium 1st in G) ──
-GROUPS = {
-    'A': {'Mexico': {'pts': 9, 'gd': 6}, 'South Africa': {'pts': 4, 'gd': -1},
-           'Korea Republic': {'pts': 3, 'gd': -1}, 'Czech Republic': {'pts': 1, 'gd': -4},
-           '_order': ['Mexico', 'South Africa', 'Korea Republic', 'Czech Republic']},
-    'B': {'Switzerland': {'pts': 7, 'gd': 4}, 'Canada': {'pts': 4, 'gd': 5},
-           'Bosnia and Herzegovina': {'pts': 4, 'gd': -1}, 'Qatar': {'pts': 1, 'gd': -8},
-           '_order': ['Switzerland', 'Canada', 'Bosnia and Herzegovina', 'Qatar']},
-    'C': {'Brazil': {'pts': 7, 'gd': 6}, 'Morocco': {'pts': 7, 'gd': 3},
-           'Scotland': {'pts': 3, 'gd': -3}, 'Haiti': {'pts': 0, 'gd': -6},
-           '_order': ['Brazil', 'Morocco', 'Scotland', 'Haiti']},
-    'D': {'USA': {'pts': 6, 'gd': 4}, 'Australia': {'pts': 4, 'gd': 0},
-           'Paraguay': {'pts': 4, 'gd': -2}, 'Turkey': {'pts': 3, 'gd': -2},
-           '_order': ['USA', 'Australia', 'Paraguay', 'Turkey']},
-    'E': {'Germany': {'pts': 6, 'gd': 6}, "Côte d'Ivoire": {'pts': 6, 'gd': 2},
-           'Ecuador': {'pts': 4, 'gd': 0}, 'Curaçao': {'pts': 1, 'gd': -8},
-           '_order': ['Germany', "Côte d'Ivoire", 'Ecuador', 'Curaçao']},
-    'F': {'Netherlands': {'pts': 7, 'gd': 6}, 'Japan': {'pts': 5, 'gd': 4},
-           'Sweden': {'pts': 4, 'gd': 0}, 'Tunisia': {'pts': 0, 'gd': -10},
-           '_order': ['Netherlands', 'Japan', 'Sweden', 'Tunisia']},
-    'G': {'Belgium': {'pts': 5, 'gd': 3, 'gf': 4}, 'Egypt': {'pts': 5, 'gd': 2, 'gf': 5},
-           'IR Iran': {'pts': 3, 'gd': 0, 'gf': 3}, 'New Zealand': {'pts': 1, 'gd': -5, 'gf': 3},
-           '_order': ['Belgium', 'Egypt', 'IR Iran', 'New Zealand']},
-    'H': {'Spain': {'pts': 7, 'gd': 5}, 'Cape Verde': {'pts': 3, 'gd': 0},
-           'Uruguay': {'pts': 2, 'gd': -1}, 'Saudi Arabia': {'pts': 2, 'gd': -4},
-           '_order': ['Spain', 'Cape Verde', 'Uruguay', 'Saudi Arabia']},
-    'I': {'France': {'pts': 9, 'gd': 8}, 'Norway': {'pts': 6, 'gd': 1},
-           'Senegal': {'pts': 3, 'gd': 2}, 'Iraq': {'pts': 0, 'gd': -11},
-           '_order': ['France', 'Norway', 'Senegal', 'Iraq']},
-    'J': {'Argentina': {'pts': 6, 'gd': 5, 'gf': 5}, 'Austria': {'pts': 3, 'gd': 0, 'gf': 3},
-           'Algeria': {'pts': 3, 'gd': -2, 'gf': 2}, 'Jordan': {'pts': 0, 'gd': -3, 'gf': 2}},
-    'K': {'Colombia': {'pts': 6, 'gd': 3, 'gf': 4}, 'Portugal': {'pts': 4, 'gd': 5, 'gf': 6},
-           'DR Congo': {'pts': 1, 'gd': -1, 'gf': 1}, 'Uzbekistan': {'pts': 0, 'gd': -7, 'gf': 1}},
-    'L': {'England': {'pts': 4, 'gd': 2, 'gf': 4}, 'Ghana': {'pts': 4, 'gd': 1, 'gf': 1},
-           'Croatia': {'pts': 3, 'gd': -1, 'gf': 3}, 'Panama': {'pts': 0, 'gd': -2, 'gf': 0}},
-}
-
-REMAINING_GROUPS = [
-    ('2026-06-27', 'Jordan', 'Argentina', 'J'),
-    ('2026-06-27', 'Algeria', 'Austria', 'J'),
-    ('2026-06-27', 'Colombia', 'Portugal', 'K'),
-    ('2026-06-27', 'DR Congo', 'Uzbekistan', 'K'),
-    ('2026-06-27', 'Panama', 'England', 'L'),
-    ('2026-06-27', 'Croatia', 'Ghana', 'L'),
-]
-
-THIRD_MAP = {
-    'A': 19, 'B': 17, 'D': 3, 'E': 13, 'F': 9, 'G': 25, 'I': 15, 'L': 29,
-}
-
-
-def run_one_sim(model, fl, base_state, cf):
+def run_one_sim(model, fl, base_state, cf, base_groups, remaining_matches):
     state = copy.deepcopy(base_state)
-    groups = copy.deepcopy(GROUPS)
+    groups = copy.deepcopy(base_groups)
 
     # Remaining group matches
-    for date_str, home, away, group in REMAINING_GROUPS:
-        date = pd.Timestamp(date_str)
+    for date, home, away, group in remaining_matches:
         ha, at = harmonize(home), harmonize(away)
         probs = predict_probs(model, fl, home, away, state, cf, 0, date)
         winner, sa, sb = sample_group(probs, home, away)
         update_state(state, ha, at, sa, sb, date)
-        if winner == home:
-            groups[group][ha]['pts'] += 3; groups[group][ha]['gd'] += 1; groups[group][at]['gd'] -= 1
-            groups[group][ha]['gf'] = groups[group][ha].get('gf', 0) + sa
-            groups[group][at]['gf'] = groups[group][at].get('gf', 0) + sb
-        elif winner == away:
-            groups[group][at]['pts'] += 3; groups[group][ha]['gd'] -= 1; groups[group][at]['gd'] += 1
-            groups[group][ha]['gf'] = groups[group][ha].get('gf', 0) + sa
-            groups[group][at]['gf'] = groups[group][at].get('gf', 0) + sb
-        else:
-            groups[group][ha]['pts'] += 1; groups[group][at]['pts'] += 1
-            groups[group][ha]['gf'] = groups[group][ha].get('gf', 0) + sa
-            groups[group][at]['gf'] = groups[group][at].get('gf', 0) + sb
+        apply_group_result(groups, group, ha, at, sa, sb)
 
     # Final standings
-    thirds_all = []
+    standings_by_group = {}
     gw, gr = {}, {}
     for g in 'ABCDEFGHIJKL':
-        gdata = groups[g].copy()
-        order = gdata.pop('_order', None)
-        if order:
-            st = [(t, gdata[t]['pts'], gdata[t]['gd'], gdata[t].get('gf', 0)) for t in order]
-        else:
-            st = sorted([(t, d['pts'], d['gd'], d.get('gf', 0)) for t, d in gdata.items()],
-                       key=lambda x: (-x[1], -x[2], -x[3], x[0]))
-        # Re-sort if stochastic results changed standings
-        st.sort(key=lambda x: (-x[1], -x[2], -x[3]))
+        st = sorted_group_standings(groups[g])
+        standings_by_group[g] = st
         gw[g], gr[g] = st[0][0], st[1][0]
-        thirds_all.append((g, st[2][0], st[2][1], st[2][2]))
 
-    thirds_all.sort(key=lambda x: (-x[2], -x[3], x[0]))
-    best8_groups = set(t[0] for t in thirds_all[:8])
-
-    # Build R32
-    third_teams = {}
-    for g, team, pts, gd in thirds_all[:8]:
-        match_num = THIRD_MAP.get(g)
-        if match_num:
-            third_teams[match_num] = team
-
-    r32_base = [
-        gr['A'], gr['B'],  # 0,1
-        gw['E'], 'PAR',    # 2,3 (placeholder)
-        gw['F'], gr['C'],  # 4,5
-        gw['C'], gr['F'],  # 6,7
-        gw['I'], 'SWE',    # 8,9
-        gr['E'], gr['I'],  # 10,11
-        gw['A'], 'ECU',    # 12,13
-        gw['L'], 'SEN',    # 14,15
-        gw['D'], 'BIH',    # 16,17
-        gw['G'], 'KOR',    # 18,19
-        gr['K'], gr['L'],  # 20,21
-        gw['H'], gr['J'],  # 22,23
-        gw['B'], 'EGY',    # 24,25
-        gw['J'], gr['H'],  # 26,27
-        gw['K'], 'GHA',    # 28,29
-        gr['D'], gr['G'],  # 30,31
-    ]
-    # Fill placeholders with third-place teams
-    placeholder_map = {3: 74, 9: 77, 13: 79, 15: 80, 17: 81, 19: 82, 25: 85, 29: 87}
-    for idx, match_num in placeholder_map.items():
-        if match_num in third_teams:
-            r32_base[idx] = third_teams[match_num]
+    thirds_all = rank_third_place_teams(standings_by_group)
+    r32_matches = build_round_of_32(gw, gr, thirds_all[:8])
 
     # Simulate R32
     r32_date = pd.Timestamp('2026-06-29')
     r32_winners = []
-    for i in range(0, 32, 2):
-        ta, tb = r32_base[i], r32_base[i+1]
+    for _, ta, tb in r32_matches:
         probs = predict_probs(model, fl, ta, tb, state, cf, 1, r32_date)
         winner, sa, sb = sample_ko(probs, ta, tb)
         r32_winners.append(winner)
@@ -323,7 +192,7 @@ def run_one_sim(model, fl, base_state, cf):
         update_state(state, harmonize(ta), harmonize(tb), sa, sb, sf_date)
 
     # 3rd place
-    probs = predict_probs(model, fl, sf_losers[0], sf_losers[1], state, cf, 0, pd.Timestamp('2026-07-18'))
+    probs = predict_probs(model, fl, sf_losers[0], sf_losers[1], state, cf, 4, pd.Timestamp('2026-07-18'))
     third_winner, _, _ = sample_ko(probs, sf_losers[0], sf_losers[1])
     third_loser = sf_losers[1] if third_winner == sf_losers[0] else sf_losers[0]
 
@@ -335,7 +204,7 @@ def run_one_sim(model, fl, base_state, cf):
     # Collect Brazil matches
     brazil_matches = []
     for round_name, pairs, winners in [
-        ('R32', [(r32_base[i], r32_base[i+1]) for i in range(0, 32, 2)], r32_winners),
+        ('R32', [(ta, tb) for _, ta, tb in r32_matches], r32_winners),
         ('R16', r16_pairs, r16_winners),
         ('QF', qf_pairs, qf_winners),
         ('SF', sf_pairs, sf_winners),
@@ -366,17 +235,9 @@ def main():
     print(f"Running {N_SIMS} Monte Carlo simulations...\n")
 
     results = pd.read_csv('data/results.csv')
-    # Load country features
-    cf_df = pd.read_csv('data/world_cup_predictors_dataset.csv')
-    cf_df = cf_df[cf_df['wc_year'] == 2022]
-    cf = {}
-    for _, r in cf_df.iterrows():
-        t = harmonize(r['country'])
-        cf[t] = {k: r.get(k, np.nan) for k in [
-            'gdp_per_capita', 'population', 'life_expectancy',
-            'urban_population_pct', 'health_expenditure_pct_gdp',
-            'elo_rating', 'fifa_ranking', 'football_power_index', 'football_tradition'
-        ]}
+    country_history = load_country_feature_history()
+    cf = country_features_for_year(country_history, 2022)
+    base_groups, remaining_matches = build_2026_group_state(results)
 
     # Train model once
     df = results.copy()
@@ -392,12 +253,16 @@ def main():
     })
 
     rows, labels = [], []
+    country_feature_cache = {}
     for _, r in df.iterrows():
         ht, at = harmonize(r['home_team']), harmonize(r['away_team'])
         hs, aw = r['home_score'], r['away_score']
         if pd.isna(hs) or pd.isna(aw): continue
         hs, aw = int(hs), int(aw)
-        rows.append(compute_features(ht, at, state, {}, 0, r['date']))
+        feature_year = int(r['date'].year)
+        if feature_year not in country_feature_cache:
+            country_feature_cache[feature_year] = country_features_for_year(country_history, feature_year)
+        rows.append(compute_features(ht, at, state, country_feature_cache[feature_year], 0, r['date']))
         labels.append(0 if hs > aw else (1 if hs == aw else 2))
         state[ht]['elo'], state[at]['elo'] = update_elo(state[ht]['elo'], state[at]['elo'], hs, aw)
         for t, gf, ga, result in [(ht, hs, aw, 'W' if hs>aw else ('D' if hs==aw else 'L')),
@@ -433,7 +298,7 @@ def main():
                                subsample=0.8, colsample_bytree=0.8,
                                objective='multi:softprob', num_class=3,
                                eval_metric='mlogloss', random_state=42, verbosity=0)
-    model.fit(X, y)
+    model, _metrics = fit_xgb_with_validation(model, X, y, label="XGBoost")
     fl = X.columns.tolist()
     print(f"  Model trained on {len(X)} matches, {len(fl)} features")
 
@@ -448,9 +313,8 @@ def main():
     print(f"  Processed {len(completed)} completed 2026 WC matches")
 
     # Mark WC participation
-    for g_data in GROUPS.values():
-        for t in g_data:
-            if t.startswith('_'): continue
+    for teams in GROUP_2026_TEAMS.values():
+        for t in teams:
             state[harmonize(t)]['wc_participations'] += 1
 
     base_state = copy.deepcopy(state)
@@ -473,7 +337,7 @@ def main():
             eta = (N_SIMS - i - 1) / rate
             print(f"  [{i+1}/{N_SIMS}] {elapsed:.0f}s elapsed, ~{eta:.0f}s remaining")
 
-        r = run_one_sim(model, fl, base_state, cf)
+        r = run_one_sim(model, fl, base_state, cf, base_groups, remaining_matches)
         champions[r['champion']] += 1
         runner_ups[r['runner_up']] += 1
         thirds[r['third']] += 1

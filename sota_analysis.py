@@ -573,6 +573,29 @@ def evaluate_lowco_model(
     return pd.DataFrame([f.__dict__ for f in folds]), pd.DataFrame(oof_rows)
 
 
+def select_logit_features_on_train(
+    train_df: pd.DataFrame,
+    candidate_cols: Sequence[str],
+    top_n: int = 20,
+    vif_threshold: float = 5.0,
+) -> List[str]:
+    """Select logit features using only one LOWCO training fold."""
+    fit_cols = ["wc_year", "won_wc"] + list(candidate_cols)
+    train_fit = train_df[fit_cols].copy()
+    imp = YearMedianImputer(year_col="wc_year").fit(train_fit, numeric_cols=candidate_cols)
+    train_imp = imp.transform(train_fit)
+    try:
+        fold_univariate = run_univariate_analysis(
+            train_imp, predictor_cols=candidate_cols, target_col="won_wc"
+        )
+        top_features = fold_univariate.head(top_n)["feature"].tolist()
+    except RuntimeError:
+        top_features = list(candidate_cols)[:top_n]
+    if len(top_features) <= 2:
+        return top_features
+    return iterative_vif_prune(train_imp[top_features].copy(), top_features, threshold=vif_threshold)
+
+
 def tune_regularized_logit_lowco(
     df: pd.DataFrame, feature_cols: Sequence[str]
 ) -> Tuple[pd.DataFrame, Dict[str, dict]]:
@@ -591,8 +614,28 @@ def tune_regularized_logit_lowco(
     all_rows = []
     best_models: Dict[str, dict] = {}
     for cfg in configs:
+        fold_rows = []
+        selected_counts = []
+        for fold_year, train_idx, test_idx in lowco_splits(df):
+            train_base = df.loc[train_idx].copy()
+            selected = select_logit_features_on_train(train_base, feature_cols)
+            selected_counts.append(len(selected))
+            train_df = df.loc[train_idx, ["wc_year", "won_wc"] + selected].copy()
+            test_df = df.loc[test_idx, ["wc_year", "won_wc"] + selected].copy()
 
-        def builder(_pos: int, _neg: int, cfg=cfg):
+            imp = YearMedianImputer(year_col="wc_year").fit(train_df, numeric_cols=selected)
+            train_imp = imp.transform(train_df)
+            test_imp = imp.transform(test_df)
+
+            x_train = train_imp[selected].astype(float).values
+            x_test = test_imp[selected].astype(float).values
+            y_train = train_imp["won_wc"].astype(int).values
+            y_test = test_imp["won_wc"].astype(int).values
+
+            scaler = StandardScaler().fit(x_train)
+            x_train = scaler.transform(x_train)
+            x_test = scaler.transform(x_test)
+
             kwargs = dict(
                 penalty=cfg["penalty"],
                 C=cfg["C"],
@@ -603,19 +646,25 @@ def tune_regularized_logit_lowco(
             )
             if cfg["penalty"] == "elasticnet":
                 kwargs["l1_ratio"] = cfg["l1_ratio"]
-            return LogisticRegression(**kwargs)
+            model = LogisticRegression(**kwargs)
+            model.fit(x_train, y_train)
+            y_prob = model.predict_proba(x_test)[:, 1]
+            y_pred = (y_prob >= 0.5).astype(int)
+            fold_rows.append(
+                {
+                    "fold_year": int(fold_year),
+                    "auc": roc_auc_score(y_test, y_prob) if len(np.unique(y_test)) > 1 else np.nan,
+                    "f1": f1_score(y_test, y_pred, zero_division=0),
+                    "brier": brier_score_loss(y_test, y_prob),
+                }
+            )
 
-        fold_df, _ = evaluate_lowco_model(
-            df,
-            feature_cols=feature_cols,
-            build_model_fn=builder,
-            scale_features=True,
-            model_name=f"logit_{cfg['penalty']}",
-        )
+        fold_df = pd.DataFrame(fold_rows)
         row = {**cfg}
         row["mean_auc"] = float(np.nanmean(fold_df["auc"]))
         row["mean_f1"] = float(np.nanmean(fold_df["f1"]))
         row["mean_brier"] = float(np.nanmean(fold_df["brier"]))
+        row["mean_selected_features"] = float(np.nanmean(selected_counts))
         all_rows.append(row)
 
     score_df = pd.DataFrame(all_rows).sort_values(["mean_auc", "mean_f1"], ascending=False).reset_index(
@@ -1410,7 +1459,7 @@ def main() -> None:
     hl_chi2, hl_p = hosmer_lemeshow_test(y_fit, y_prob_fit, n_groups=10)
     pd.DataFrame([{"hl_chi2": hl_chi2, "hl_p_value": hl_p}]).to_csv(OUT_DIR / "logit_hosmer_lemeshow.csv", index=False)
 
-    reg_scores, reg_best = tune_regularized_logit_lowco(df, feature_cols=vif_selected)
+    reg_scores, reg_best = tune_regularized_logit_lowco(df, feature_cols=predictor_cols)
     reg_scores.to_csv(OUT_DIR / "regularized_logit_lowco_scores.csv", index=False)
 
     # ---------------------------------------------------------------------

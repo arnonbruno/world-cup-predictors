@@ -26,6 +26,8 @@ from sklearn.metrics import accuracy_score, log_loss, roc_auc_score
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
 
+from shared import parse_bool
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
@@ -360,7 +362,7 @@ def build_match_feature_dataset(
         away = row.away_team
         home_score = float(row.home_score)
         away_score = float(row.away_score)
-        neutral = bool(row.neutral)
+        neutral = parse_bool(row.neutral)
 
         home_feat = team_feature_snapshot(home, states, date)
         away_feat = team_feature_snapshot(away, states, date)
@@ -448,7 +450,7 @@ def build_state_until(
             tournament=row.tournament,
             home_scorer_stats=home_scorer_stats,
             away_scorer_stats=away_scorer_stats,
-            neutral=bool(row.neutral),
+            neutral=parse_bool(row.neutral),
         )
     return states, h2h
 
@@ -652,7 +654,7 @@ def run_tournament_simulation(
             match_date=row.date,
             home_team=row.home_team,
             away_team=row.away_team,
-            neutral=bool(row.neutral),
+            neutral=parse_bool(row.neutral),
             tournament=row.tournament,
             states=states,
             h2h=h2h,
@@ -701,7 +703,7 @@ def run_tournament_simulation(
                     match_date=row.date,
                     home_team=home_team,
                     away_team=away_team,
-                    neutral=bool(row.neutral),
+                    neutral=parse_bool(row.neutral),
                     tournament=row.tournament,
                     states=states,
                     h2h=h2h,

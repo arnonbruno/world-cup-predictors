@@ -10,6 +10,8 @@ import json
 import os
 import time
 
+from shared import harmonize_country
+
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 
 # FIFA Rankings at each World Cup (top-ranked teams per tournament)
@@ -134,6 +136,7 @@ ELO_AT_WC = {
 def enrich_dataset():
     """Add FIFA rankings, Elo ratings, and derived features to dataset."""
     df = pd.read_csv(os.path.join(DATA_DIR, 'world_cup_predictors_dataset.csv'))
+    df['country'] = df['country'].map(harmonize_country)
 
     print(f"Loaded dataset: {df.shape}")
 
@@ -142,6 +145,7 @@ def enrich_dataset():
     df['fifa_rank_inverse'] = np.nan
     for year, rankings in FIFA_RANKINGS_AT_WC.items():
         for team, rank in rankings.items():
+            team = harmonize_country(team)
             mask = (df['wc_year'] == year) & (df['country'] == team)
             df.loc[mask, 'fifa_rank'] = rank
             df.loc[mask, 'fifa_rank_inverse'] = 1.0 / rank
@@ -152,6 +156,7 @@ def enrich_dataset():
     df['elo_rating'] = np.nan
     for year, ratings in ELO_AT_WC.items():
         for team, elo in ratings.items():
+            team = harmonize_country(team)
             mask = (df['wc_year'] == year) & (df['country'] == team)
             df.loc[mask, 'elo_rating'] = elo
 
@@ -193,9 +198,8 @@ def enrich_dataset():
         (df['elo_rating'] - 1400) / 10 * 0.3
     )
 
-    # Is former champion
-    former_champions = set(df[df['won_wc'] == 1]['country'].unique())
-    df['is_former_champion'] = df['country'].apply(lambda x: 1 if x in former_champions else 0)
+    # Is former champion: prior titles only, never future winners.
+    df['is_former_champion'] = (df['wc_titles_before'].fillna(0) > 0).astype(int)
 
     # Decade feature
     df['decade'] = (df['wc_year'] // 10) * 10
