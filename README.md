@@ -8,33 +8,33 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 | Place | Team | Probability |
 |-------|------|-------------|
-| 🥇 Champion | **Argentina** | 70.5% |
+| 🥇 Champion | **Argentina** | 66.1% |
 | 🥈 Runner-up | **Spain** | — |
-| 🥉 Third | **Brazil** | 71.3% (vs France) |
+| 🥉 Third | **Brazil** | 66.1% (vs France) |
 | 4th | **France** | — |
 
-**Corrected Round of 32 bracket:**
-- Match 73: South Africa vs Canada
-- Match 74: Germany vs Paraguay
-- Match 75: Netherlands vs Morocco
-- Match 76: Brazil vs Japan
-- Match 77: France vs Sweden
-- Match 78: Côte d'Ivoire vs Norway
-- Match 79: Mexico vs Ecuador
-- Match 80: England vs Austria
-- Match 81: USA vs Bosnia and Herzegovina
-- Match 82: Belgium vs Korea Republic
-- Match 83: Portugal vs Croatia
-- Match 84: Spain vs Algeria
-- Match 85: Switzerland vs IR Iran
-- Match 86: Argentina vs Cape Verde
-- Match 87: Colombia vs Ghana
-- Match 88: Australia vs Egypt
+**Round of 32 bracket (confirmed vs official FIFA bracket):**
+- M73: South Africa vs Canada → Canada (67.6%)
+- M74: Germany vs Paraguay → Germany (66.1%)
+- M75: Netherlands vs Morocco → Netherlands (66.1%)
+- M76: Brazil vs Japan → Brazil (74.0%)
+- M77: France vs Sweden → France (74.0%)
+- M78: Côte d'Ivoire vs Norway → Norway (61.0%)
+- M79: Mexico vs Ecuador → Ecuador (61.0%)
+- M80: England vs Austria → England (67.6%)
+- M81: USA vs Bosnia and Herzegovina → USA (67.6%)
+- M82: Belgium vs Korea Republic → Belgium (67.6%)
+- M83: Portugal vs Croatia → Portugal (66.1%)
+- M84: Spain vs Algeria → Spain (74.0%)
+- M85: Switzerland vs IR Iran → Switzerland (61.0%)
+- M86: Argentina vs Cape Verde → Argentina (96.4%)
+- M87: Colombia vs Ghana → Colombia (91.3%)
+- M88: Australia vs Egypt → Australia (66.1%)
 
 **Path to the final:**
-- Argentina: Cape Verde ✅ → Australia/Egypt path → Colombia/Switzerland path → Brazil (SF, 51.7%) → Spain (Final, 70.5%)
-- Spain: Algeria ✅ → Portugal/Croatia path → Belgium/USA path → France (SF, 55.6%) → Argentina (Final)
-- Brazil: Japan (R32) → Norway (R16) → England (QF, 73.6%) → Argentina (SF, 48.3%) → France (3rd place)
+- Argentina: Cape Verde ✅ → Australia → Colombia → Brazil (SF, 61.0%) → Spain (Final, 66.1%)
+- Spain: Algeria ✅ → Portugal/Croatia → Belgium/USA → France (SF, 55.6%) → Argentina (Final)
+- Brazil: Japan (R32, 74.0%) → Norway (R16) → England (QF, 66.1%) → Argentina (SF, 39.0%) → France (3rd, 66.1%)
 
 ## How It Works
 
@@ -42,11 +42,11 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 The system uses a **blended ensemble** of two models:
 
-1. **XGBoost Classifier** (25% weight) — gradient-boosted trees trained on 52 features per match, with isotonic calibration, draw class weighting (1.6×), and time-decay sample weights (half-life: 4 years).
+1. **Dixon-Coles Poisson Goal Model** (75% weight for group stage, 50% for knockouts) — models goals scored as Poisson distributions with team-specific attack/defense strengths and home advantage. Naturally produces realistic draw probabilities. Blend weight tuned on chronological holdout.
 
-2. **Dixon-Coles Poisson Goal Model** (75% weight) — models goals scored as Poisson distributions with team-specific attack/defense strengths and home advantage. Naturally produces realistic draw probabilities. Blend weight tuned on chronological holdout.
+2. **XGBoost Classifier** (25% weight for group stage, 50% for knockouts) — gradient-boosted trees trained on 52+ features per match, with isotonic calibration, draw class weighting (1.6×), and time-decay sample weights (half-life: 4 years).
 
-### Features (52 total)
+### Features (52+ total)
 
 **Team Strength (7):**
 - Elo rating (current), Elo difference, Elo sum
@@ -59,7 +59,7 @@ The system uses a **blended ensemble** of two models:
 - Attack/defense trend (recent 3 vs 10 match baseline)
 
 **Head-to-Head (5):**
-- H2H matches, win rate, draw rate
+- H2H matches, win rate, draw rate (time-decayed, 15-year limit)
 - Avg goals for/against in H2H
 
 **Opponent-Weighted Form (2):**
@@ -96,33 +96,51 @@ The system uses a **blended ensemble** of two models:
 2. **State management:** Rolling Elo, form windows (20 matches), H2H records, all updated chronologically
 3. **Feature engineering:** `shared.py` centralizes all feature computation — same code for training, backtest, and prediction
 4. **Validation:** Chronological holdout (last 20% of matches), NOT random split
-5. **Calibration:** Isotonic regression on holdout probabilities
+5. **Calibration:** Isotonic regression on holdout probabilities, WC-specific calibration for knockout matches
 6. **Missing data:** XGBoost handles NaN natively (odds and squad values absent for older matches)
 
 ### Knockout Stage Handling
 
-Knockout matches cannot end in a draw. The model renormalizes probabilities:
-- P(home | no draw) = P(home) / (P(home) + P(away))
-- Applied to predictions, Elo baseline, and counterfactuals
+Knockout matches cannot end in a draw. The model:
+1. Uses reduced Dixon-Coles weight (50% vs 75% in group stage) to avoid over-amplification
+2. Renormalizes: P(home | no draw) = P(home) / (P(home) + P(away))
+3. Applies WC-specific calibration buckets (not qualifier-dominated all-match calibration)
+4. Prints raw 3-way probabilities alongside renormalized ones for transparency
 
 ## Performance
 
-### Backtest on 2026 World Cup Group Stage (62 matches)
+### Walk-Forward Backtest (11,909 matches, 2014–2026)
 
-Walk-forward backtest: predict each match, compare to actual result, update state with real result, predict next.
+The primary validation uses all matches from 2014 onwards with walk-forward prediction:
+
+| Metric | Value |
+|--------|-------|
+| **Accuracy** | 59.6% (7,095/11,909) |
+| **Log-loss** | 0.8795 |
+| **Brier score** | 0.1724 |
+| **ECE** | 0.0215 |
+
+**By tournament type:**
+- Qualifiers: 64.4% (easiest — big vs small teams)
+- Continental: 57.2%
+- Friendlies: 56.2%
+- World Cup: 54.7% (hardest — even matchups)
+
+**Calibration (well-calibrated across all buckets):**
+- 90-100% confidence: 94.5% actual accuracy (gap 0.2%)
+- 80-90% confidence: 87.4% actual (gap 2.6%)
+- 70-80% confidence: 77.3% actual (gap 2.7%)
+- 60-70% confidence: 68.1% actual (gap 3.2%)
+
+**Note:** WC knockout calibration is weaker than overall calibration. At 80-90% confidence on WC matches specifically, actual accuracy is ~57%. The model is aware of this and applies WC-specific calibration for knockout predictions.
+
+### 2026 WC Group Stage Backtest (62 matches)
 
 | Metric | Value |
 |--------|-------|
 | **Accuracy** | 64.5% (40/62) |
-| **Log-loss** | 0.8858 |
-| **Brier score** | 0.1791 |
-
-**Calibration:**
-- 30-40% confidence: 83.3% actual accuracy
-- 50-60% confidence: 60.0% actual accuracy
-- 70-80% confidence: 70.0% actual accuracy
-
-**Weakness:** Draws remain difficult — 9 of 22 draws were missed at ≥60% confidence. The Dixon-Coles Poisson model (75% of blend) helps significantly with draw estimation.
+| **Log-loss** | 0.8957 |
+| **Brier score** | 0.1808 |
 
 ### Model Evolution
 
@@ -132,6 +150,7 @@ Walk-forward backtest: predict each match, compare to actual result, update stat
 | V2 (Opus review) | 61.3% | 0.9018 | 0.1825 | +14 features, bug fixes |
 | V3 (ensemble) | **64.5%** | **0.8858** | **0.1791** | Dixon-Coles, odds, calibration |
 | V4 (squad values) | 64.5% | 0.8897 | 0.1797 | +4 squad value features |
+| V5 (walk-forward) | 59.6% | **0.8795** | **0.1724** | 11,909-match validation |
 
 ## Data Sources
 
@@ -149,6 +168,8 @@ Walk-forward backtest: predict each match, compare to actual result, update stat
 ├── shared.py                  # Centralized feature engineering, state, Elo, aliases
 ├── predict_2026.py            # Main 2026 WC prediction pipeline
 ├── backtest_2026_wc.py        # Walk-forward backtest on 2026 group matches
+├── backtest_walkforward.py    # Walk-forward backtest on ALL 2014+ matches
+├── backtest_walkforward_1998.py # Walk-forward backtest on ALL 1998+ matches
 ├── explain_match.py           # SHAP-based match explanation engine
 ├── monte_carlo_2026.py        # Monte Carlo tournament simulation (10K runs)
 ├── feature_selection.py       # Permutation importance feature selection
@@ -168,23 +189,16 @@ Walk-forward backtest: predict each match, compare to actual result, update stat
 │   ├── shootouts.csv          # Penalty shootout data
 │   └── world_cup_predictors_dataset.csv  # Country-level features
 │
-├── output/
-│   ├── explain/               # SHAP waterfall/force plots per matchup
-│   ├── sota/                  # SOTA analysis outputs
-│   └── ...
-│
-├── IMPROVEMENTS.md            # Code review + improvement roadmap
-├── IMPROVEMENTS_V2.md         # V2 improvement results
-├── REVIEW.md                  # Code review findings
-├── REVIEW_EXPLAIN.md          # Explain module review
-└── SQUAD_VALUES_RESULTS.md    # Squad value integration results
+└── output/
+    ├── explain/               # SHAP waterfall/force plots per matchup
+    └── sota/                  # SOTA analysis outputs
 ```
 
 ## Setup
 
 ```bash
 # Install dependencies
-pip install pandas numpy scikit-learn xgboost shap scipy matplotlib
+pip install pandas numpy scikit-learn xgboost shap scipy matplotlib lightgbm optuna
 
 # Download raw data (not in repo — too large)
 curl -o data/results.csv https://raw.githubusercontent.com/martj42/international_results/master/results.csv
@@ -193,7 +207,8 @@ curl -o data/shootouts.csv https://raw.githubusercontent.com/martj42/internation
 
 # Run predictions
 python3 predict_2026.py              # Full bracket prediction
-python3 backtest_2026_wc.py          # Walk-forward backtest
+python3 backtest_2026_wc.py          # Walk-forward backtest (2026 matches)
+python3 backtest_walkforward.py      # Walk-forward backtest (all 2014+ matches)
 python3 explain_match.py Brazil Japan --stage 1   # Match explanation with SHAP
 python3 monte_carlo_2026.py          # 10K tournament simulations
 python3 feature_selection.py         # Feature importance analysis
@@ -201,4 +216,4 @@ python3 feature_selection.py         # Feature importance analysis
 
 ## Requirements
 
-Python 3.11+ with: pandas, numpy, scikit-learn, xgboost, shap, scipy, matplotlib
+Python 3.11+ with: pandas, numpy, scikit-learn, xgboost, shap, scipy, matplotlib, lightgbm, optuna
