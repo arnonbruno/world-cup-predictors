@@ -677,6 +677,78 @@ def tune_regularized_logit_lowco(
     return score_df, best_models
 
 
+def evaluate_regularized_logit_lowco_with_train_selection(
+    df: pd.DataFrame,
+    feature_cols: Sequence[str],
+    best_cfg: Dict[str, object],
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Evaluate the selected regularized logit with train-fold feature selection."""
+    folds = []
+    oof_rows = []
+
+    for fold_year, train_idx, test_idx in lowco_splits(df):
+        train_base = df.loc[train_idx].copy()
+        selected = select_logit_features_on_train(train_base, feature_cols)
+        if not selected:
+            selected = list(feature_cols)[:1]
+
+        train_df = df.loc[train_idx, ["wc_year", "won_wc"] + selected].copy()
+        test_df = df.loc[test_idx, ["wc_year", "won_wc"] + selected].copy()
+
+        imp = YearMedianImputer(year_col="wc_year").fit(train_df, numeric_cols=selected)
+        train_imp = imp.transform(train_df)
+        test_imp = imp.transform(test_df)
+
+        x_train = train_imp[selected].astype(float).values
+        x_test = test_imp[selected].astype(float).values
+        y_train = train_imp["won_wc"].astype(int).values
+        y_test = test_imp["won_wc"].astype(int).values
+
+        scaler = StandardScaler().fit(x_train)
+        x_train = scaler.transform(x_train)
+        x_test = scaler.transform(x_test)
+
+        kwargs = dict(
+            penalty=best_cfg["penalty"],
+            C=float(best_cfg["C"]),
+            solver=best_cfg["solver"],
+            class_weight="balanced",
+            random_state=RANDOM_STATE,
+            max_iter=5000,
+        )
+        if best_cfg["penalty"] == "elasticnet":
+            kwargs["l1_ratio"] = float(best_cfg["l1_ratio"])
+
+        model = LogisticRegression(**kwargs)
+        model.fit(x_train, y_train)
+        y_prob = model.predict_proba(x_test)[:, 1]
+        y_pred = (y_prob >= 0.5).astype(int)
+
+        folds.append(
+            {
+                "fold_year": int(fold_year),
+                "auc": roc_auc_score(y_test, y_prob) if len(np.unique(y_test)) > 1 else np.nan,
+                "precision": precision_score(y_test, y_pred, zero_division=0),
+                "recall": recall_score(y_test, y_pred, zero_division=0),
+                "f1": f1_score(y_test, y_pred, zero_division=0),
+                "brier": brier_score_loss(y_test, y_prob),
+                "n_features": len(selected),
+                "selected_features": ",".join(selected),
+            }
+        )
+        for yy, pp in zip(y_test, y_prob):
+            oof_rows.append(
+                {
+                    "model": "best_regularized_logit",
+                    "fold_year": int(fold_year),
+                    "y_true": int(yy),
+                    "y_prob": float(pp),
+                }
+            )
+
+    return pd.DataFrame(folds), pd.DataFrame(oof_rows)
+
+
 def fit_statsmodels_logit_with_profile_ci(
     df: pd.DataFrame, feature_cols: Sequence[str]
 ) -> Tuple[pd.DataFrame, sm.Logit]:
@@ -1438,6 +1510,8 @@ def main() -> None:
     # ---------------------------------------------------------------------
     # Phase 4: Multivariate logistic regression.
     # ---------------------------------------------------------------------
+    # Descriptive/inferential only: this full-sample feature screen is not used
+    # by the predictive LOWCO best-logit assessment below.
     top_features = univariate.head(20)["feature"].tolist()
     vif_base = uni_df[top_features].copy()
     vif_selected = iterative_vif_prune(vif_base, top_features, threshold=5.0)
@@ -1552,25 +1626,10 @@ def main() -> None:
         best_row = reg_scores.iloc[0]
         best_cfg = best_row.to_dict()
 
-        def best_logit_builder(_pos: int, _neg: int):
-            kwargs = dict(
-                penalty=best_cfg["penalty"],
-                C=float(best_cfg["C"]),
-                solver=best_cfg["solver"],
-                class_weight="balanced",
-                random_state=RANDOM_STATE,
-                max_iter=5000,
-            )
-            if best_cfg["penalty"] == "elasticnet":
-                kwargs["l1_ratio"] = float(best_cfg["l1_ratio"])
-            return LogisticRegression(**kwargs)
-
-        logit_fold, logit_oof = evaluate_lowco_model(
+        logit_fold, logit_oof = evaluate_regularized_logit_lowco_with_train_selection(
             df,
-            feature_cols=vif_selected,
-            build_model_fn=best_logit_builder,
-            scale_features=True,
-            model_name="best_regularized_logit",
+            feature_cols=predictor_cols,
+            best_cfg=best_cfg,
         )
         logit_fold.to_csv(OUT_DIR / "best_logit_lowco_folds.csv", index=False)
         logit_oof.to_csv(OUT_DIR / "best_logit_lowco_oof_predictions.csv", index=False)

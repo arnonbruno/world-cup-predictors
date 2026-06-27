@@ -1,3 +1,232 @@
+# World Cup Prediction Pipeline Verification
+
+## Executive Summary
+
+**Overall verdict: FAIL for full pipeline soundness, PASS for several previously fixed items.**
+
+The prior fix cycle did correct important issues: `is_former_champion` is now derived from `wc_titles_before`, World Bank indicators use year-1-or-earlier data, 2026 World Cup matches are excluded from 2026 model training, group-stage draws are supported, `_order` is gone, and the deterministic, Monte Carlo, and explanation scripts now share core feature/bracket helpers.
+
+Remaining issues can still invalidate parts of the prediction results:
+
+- The 2026 Round of 32 third-place assignment is not a complete FIFA allocation algorithm. It maps each third-place group to one fixed slot in `shared.py`, but the 48-team format requires allocation based on which eight third-place groups qualify and each slot's allowed source groups.
+- Several 2026 teams have no country-feature rows in `data/world_cup_predictors_dataset.csv`; Algeria is especially concerning because it appears in historical participant lists but is missing from `COUNTRY_TO_ISO3`.
+- `compute_match_features()` emits `wc_participations` and `wc_titles`, but the 2026 model training loops do not populate those fields historically. Then 2026 inference increments `wc_participations`, creating a train/inference mismatch.
+- Leakage-prone winner-relative columns still exist in the generated dataset and are still used by the legacy `analysis.py`. `sota_analysis.py` still has some full-sample feature selection outside LOWCO for inferential/best-logit paths.
+
+## Answers to Critical Questions
+
+1. **Is there any remaining data leakage?** Yes. The core 2026 predictor avoids the largest direct leaks, but `collect_data.py` still generates winner-relative target-derived columns, `analysis.py` still analyzes them, and `sota_analysis.py` still performs some full-sample feature selection outside LOWCO.
+
+2. **Is the XGBoost model properly validated?** Partially. The shared helper now adds a validation split, holdout metrics, and early stopping for the 2026 XGBoost models. The split is random rather than chronological, and some other XGBoost scripts use backtests/time splits rather than early stopping.
+
+3. **Are the 2026 bracket pairings mathematically correct per FIFA?** R16, QF, SF, final, and third-place propagation are structurally correct. The Round of 32 third-place slot assignment is not sufficient for FIFA's allocation rules.
+
+4. **Are country features loaded correctly for training and inference?** The feature column names are consistent in `shared.py`, and training/inference use the same feature vector. Coverage is incomplete for 2026 teams, so some teams are inferred with missing/default country features.
+
+5. **Does draw handling work in group-stage simulations?** Yes. Deterministic group predictions can return draws, and Monte Carlo group sampling includes draws.
+
+6. **Is the backtest truly chronological?** `backtest.py` is chronological (`wc_year < test_year`) with train-only imputation/scaling. `sota_analysis.py` LOWCO is not chronological by design.
+
+7. **Are there bugs that could invalidate prediction results?** Yes: R32 third-place allocation, missing country-feature coverage, and inconsistent WC experience state features can materially affect 2026 predictions.
+
+## Data Pipeline Verification
+
+### `collect_data.py`
+
+Correct:
+
+- `WC_WINNERS`, runners-up, semifinalists, participants, and hosts are canonicalized through `harmonize_country()` before dataset construction (`collect_data.py:161-171`). This fixes the earlier Germany/West Germany winner-label split.
+- Historical title counts are computed with `y < year` (`collect_data.py:592-623`).
+- World Bank indicators use lagged data only: the loop tries `year - 1`, `year - 2`, and `year - 3`, never same-year values (`collect_data.py:545-554`). The population fallback also uses only years before the tournament (`collect_data.py:556-561`).
+- Honduras maps to `HND`, and UK nations are separate football teams (`England=ENG`, `Scotland=SCO`, `Wales=WAL`, `Northern Ireland=NIR`) in `COUNTRY_TO_ISO3` (`collect_data.py:70-89`).
+- Winner-relative columns are generated but are target-derived and must be excluded from predictive models (`collect_data.py:530-531`, `collect_data.py:651-663`).
+
+Remaining issues:
+
+- `COUNTRY_TO_ISO3` lacks `Algeria` even though Algeria is listed as a World Cup participant in 1982, 1986, 2010, and 2014 (`collect_data.py:62-100`, `collect_data.py:115-123`). The generated dataset has no Algeria rows, so Algeria has no historical country features for 2026 inference.
+- Historical variant coverage is still incomplete. `Dutch East Indies` appears in the 1938 participants but has no shared alias/ISO mapping and is skipped (`collect_data.py:106`, `collect_data.py:431-432`).
+- World Bank filling stops after the first available lag year even if that year has only a subset of indicators (`collect_data.py:545-554`). This is not leakage, but it reduces completeness.
+
+### `enrich_dataset.py`
+
+Correct:
+
+- Country names are harmonized before ranking/Elo enrichment (`enrich_dataset.py:138-149`, `enrich_dataset.py:157-161`).
+- `is_former_champion` is now leakage-safe because it is derived from `wc_titles_before > 0`, not from future winners (`enrich_dataset.py:201-202`).
+- `football_power_index` uses prior titles/finals plus Elo/tradition (`enrich_dataset.py:193-199`).
+
+Remaining issues:
+
+- Manual ranking dictionaries still have data-quality quirks, such as duplicate France entries in 2014 and `Bosnia` shorthand before harmonization (`enrich_dataset.py:73-82`). These do not create future leakage but should be treated as approximate data.
+
+## Shared Utilities Verification
+
+### `shared.py`
+
+Correct:
+
+- `COUNTRY_FEATURE_COLUMNS` matches actual dataset columns (`shared.py:41-51`).
+- `GROUP_2026_TEAMS` matches the 2026 World Cup group fixtures present in `data/results.csv` after harmonization (`shared.py:53-66`).
+- `build_2026_group_state()` loads completed 2026 FIFA World Cup rows from `results.csv`, applies completed scores, and returns unplayed fixtures (`shared.py:250-269`).
+- `sorted_group_standings()` sorts by points, goal difference, then goals for (`shared.py:272-276`).
+- `rank_third_place_teams()` includes goals for after goal difference (`shared.py:279-284`).
+- `fit_xgb_with_validation()` implements a validation split, holdout accuracy/log-loss, and best-effort XGBoost early stopping (`shared.py:195-217`).
+- `compute_match_features()` builds the same feature dictionary used for training and inference (`shared.py:114-156`).
+
+Remaining issues:
+
+- `NAME_ALIASES` is improved but not exhaustive for all historical variants used elsewhere in the project. It lacks entries such as `East Germany`, `German DR`, `Dutch East Indies`, `Republic of Ireland`, `Burma`, `United Arab Republic`, and `Vietnam Republic` (`shared.py:17-39`).
+- `build_round_of_32()` does not implement FIFA's full third-place allocation matrix. `THIRD_SLOT_BY_GROUP` assigns fixed slots by source group (`shared.py:68-77`, `shared.py:308-318`), but official third-place slots depend on which eight third-place groups qualify.
+- `compute_match_features()` exposes `wc_participations` and `wc_titles` (`shared.py:138-139`), but the main 2026 training loops do not update those fields historically.
+
+## 2026 Model Pipeline Verification
+
+### `predict_2026.py`
+
+Correct:
+
+- Training excludes 2026 FIFA World Cup matches (`predict_2026.py:54-58`).
+- Country features are pulled through `load_country_feature_history()`/`country_features_for_year()`, and the same `compute_match_features()` path is used for training and inference (`predict_2026.py:75-79`, `predict_2026.py:186-193`).
+- Group-stage draw handling works: `predict()` returns `None` when draw probability is highest for stage 0, and group simulation applies a 1-1 result (`predict_2026.py:154-163`, `predict_2026.py:221-231`).
+- Completed 2026 World Cup matches are processed into match state, and `build_2026_group_state()` supplies completed group tables plus remaining fixtures (`predict_2026.py:195-205`).
+- `_order` is no longer present or treated as a pseudo-team.
+- R16 and QF pairings use the non-sequential FIFA crossovers (`predict_2026.py:269-293`).
+- The third-place match uses semifinal losers, not quarterfinal losers (`predict_2026.py:296-310`).
+
+Remaining issues:
+
+- R32 third-place assignment inherits the incomplete fixed-slot logic from `build_round_of_32()` (`predict_2026.py:264-267`, `shared.py:287-328`).
+- Historical `wc_participations` and `wc_titles` are not updated during model training; only `wc_matches` and `wc_wins` are updated for historical World Cup matches (`predict_2026.py:107-110`). Then all 2026 teams get `wc_participations += 1` before inference (`predict_2026.py:206-212`).
+- Inference uses 2022-or-earlier country features (`predict_2026.py:186-190`), but several 2026 teams have no rows in the country dataset and therefore receive default/missing values in `compute_match_features()` (`shared.py:125-155`).
+
+### `monte_carlo_2026.py`
+
+Correct:
+
+- Training excludes 2026 FIFA World Cup matches (`monte_carlo_2026.py:243-246`).
+- Third-place insertion uses the shared `build_round_of_32()` path, so the old index-vs-match-number bug is fixed (`monte_carlo_2026.py:134-135`).
+- Group sampling uses model probabilities directly and allows draws (`monte_carlo_2026.py:104-112`, `monte_carlo_2026.py:118-124`).
+- Knockout sampling handles model draw outcomes by selecting an advancing team proportional to non-draw win probabilities (`monte_carlo_2026.py:93-102`).
+- R16, QF, SF, third-place, and final structures match `predict_2026.py` (`monte_carlo_2026.py:146-203`).
+
+Remaining issues:
+
+- The Monte Carlo bracket inherits the incomplete FIFA third-place allocation from `shared.py` (`monte_carlo_2026.py:134-135`, `shared.py:287-328`).
+- It duplicates the training/state-update logic from `predict_2026.py`, including the unpopulated historical `wc_participations`/`wc_titles` issue (`monte_carlo_2026.py:290-293`, `monte_carlo_2026.py:315-318`).
+
+### `analyze_explain.py`
+
+Correct:
+
+- Training excludes 2026 FIFA World Cup matches (`analyze_explain.py:125-128`).
+- It uses `fit_xgb_with_validation()` for validation/early stopping (`analyze_explain.py:177-184`).
+- Multiclass SHAP handling supports both list and array outputs via `shap_values_for_class()` and `shap_matrix_for_class()` (`analyze_explain.py:95-116`).
+- Feature names come from the actual trained `X.columns.tolist()` and are reused for the explanation frame (`analyze_explain.py:177-184`, `analyze_explain.py:224-225`, `analyze_explain.py:251-252`).
+
+Remaining issues:
+
+- It inherits the same R32 third-place allocation and country-feature coverage issues from shared utilities (`analyze_explain.py:211-216`, `shared.py:287-328`).
+- SHAP class 0 means "home-team win", not a team-invariant Brazil class (`analyze_explain.py:216-228`, `analyze_explain.py:247-257`).
+
+## Backtest Verification
+
+### `backtest.py`
+
+Correct:
+
+- Training is strictly chronological: each fold uses `df['wc_year'] < test_year` (`backtest.py:48-56`).
+- Imputation and scaling are fit on train only and then applied to the test year (`backtest.py:64-71`).
+- Direct outcome leaks, winner-relative variables, and post-tournament aggregate columns are dropped (`backtest.py:28-35`).
+- Metrics are reasonable: exact winner, top-3, top-5, pooled AUC, and Brier score (`backtest.py:77-137`).
+
+Remaining issue:
+
+- This is a country-level winner backtest, not a match/bracket simulation. It assumes the tournament field is known.
+
+## SOTA Analysis Verification
+
+### `sota_analysis.py`
+
+Correct:
+
+- Direct leakage columns and post-tournament columns are audited and dropped from the predictive dataframe (`sota_analysis.py:64-72`, `sota_analysis.py:98-102`, `sota_analysis.py:1419-1423`).
+- The generic LOWCO evaluator fits year-median imputers and scalers inside each fold on train data only (`sota_analysis.py:515-573`).
+- Regularized-logit hyperparameter tuning selects features inside each LOWCO fold (`sota_analysis.py:619-637`).
+- The causal section is exploratory, with an explicit DAG and caveats; the IV attempt self-flags weak/invalid instruments (`sota_analysis.py:929-1165`, `sota_analysis.py:1396-1399`).
+
+Remaining issues:
+
+- `lowco_splits()` is leave-one-tournament-out, not chronological (`sota_analysis.py:498-505`). That is fine for robustness analysis, but not for historical forecasting.
+- Full-sample feature selection still occurs for the unpenalized inferential logit (`sota_analysis.py:1430-1448`).
+- The final `best_regularized_logit` candidate is evaluated using `vif_selected`, which was selected on the full sample (`sota_analysis.py:1441-1448`, `sota_analysis.py:1568-1577`).
+- Full-sample RF/XGB/SHAP interpretation models are descriptive, not out-of-sample importance estimates (`sota_analysis.py:729-913`).
+
+## Incremental Predictor Verification
+
+### `incremental_predictor.py`
+
+Correct:
+
+- Walk-forward feature rows are built before updating team state/H2H/tournament progress (`incremental_predictor.py:673-720`).
+- Country vectors use only prior World Cup years, not the current tournament year (`incremental_predictor.py:431-444`).
+- World Cup experience snapshots are constructed strictly from previous tournaments (`incremental_predictor.py:447-527`).
+- Elo updates use a standard expected-score form with a reasonable home-advantage and margin multiplier variant (`incremental_predictor.py:182-188`, `incremental_predictor.py:309-314`).
+- Rolling form and goal stats are based on previous matches only (`incremental_predictor.py:197-225`, `incremental_predictor.py:716-719`).
+- Per-World-Cup training uses matches before the World Cup start date (`incremental_predictor.py:781-805`).
+
+Remaining issues:
+
+- The country feature lookup includes all numeric columns except a short exclusion list (`incremental_predictor.py:417-428`). Because the source dataset still contains target-derived/post-tournament columns, lagged versions of those fields can enter the match model. This is chronological-safe when strictly prior, but the semantics are questionable and should be explicitly filtered.
+- The validation model does not use early stopping (`incremental_predictor.py:724-742`). It reports a time-window validation metric, which is useful, but not the same as the early-stopped XGBoost helper.
+
+## Match Predictor Verification
+
+### `match_predictor.py`
+
+Correct:
+
+- Neutral fields are parsed with `shared.parse_bool`, avoiding `bool("False")` (`match_predictor.py:29`, `match_predictor.py:365`, `match_predictor.py:453`, `match_predictor.py:657`).
+- Match features are generated chronologically and state is updated only after feature creation (`match_predictor.py:346-418`).
+- Time-split evaluation is chronological (`match_predictor.py:499-534`).
+- Meta-model backtest trains on `wc_year < year` and uses train-only imputation/scaling (`match_predictor.py:863-888`).
+- The meta-model drops direct leak and post-tournament country-level columns (`match_predictor.py:844-861`).
+
+Remaining issues:
+
+- Historical tournament simulation reconstructs knockout trees from actual winners and actual bracket topology (`match_predictor.py:582-619`). This is acceptable for a retrospective simulator, but it should not be described as a clean pre-tournament bracket forecast.
+- Simulated tournament state is not updated match-by-match inside each Monte Carlo run; later-round probabilities use start-of-tournament state plus matchup identity (`match_predictor.py:635-733`).
+
+## Legacy Analysis Verification
+
+### `analysis.py`
+
+Remaining issues:
+
+- This legacy script still does not drop `gdp_per_capita_vs_winner` or `population_vs_winner` from modeling/importance analyses (`analysis.py:61-64`, `analysis.py:134-137`, `analysis.py:175-179`, `analysis.py:299-303`, `analysis.py:358-362`, `analysis.py:404-408`).
+- It reports in-sample model metrics and full-sample importances (`analysis.py:257-285`, `analysis.py:317-390`).
+
+Assessment: exploratory only. Do not use `analysis.py` outputs as evidence of model validity.
+
+## Confirmed Fixes
+
+- `is_former_champion` is now derived from `wc_titles_before` without future winners (`enrich_dataset.py:201-202`).
+- World Bank data uses at least a one-year lag (`collect_data.py:545-554`).
+- Honduras and UK-nation ISO mappings are corrected (`collect_data.py:70-89`).
+- `WC_WINNERS` is canonicalized through shared harmonization (`collect_data.py:161-162`).
+- Completed 2026 World Cup matches are loaded from `results.csv`, not hard-coded into group tables (`shared.py:250-269`).
+- Third-place ranking includes goals for (`shared.py:279-284`).
+- XGBoost training in the 2026 scripts now uses `fit_xgb_with_validation()` (`predict_2026.py:114-119`, `monte_carlo_2026.py:297-302`, `analyze_explain.py:177-184`).
+- Group-stage draws work in deterministic and Monte Carlo simulations (`predict_2026.py:160-163`, `monte_carlo_2026.py:104-112`).
+- `_order` is absent from the current Python codebase.
+- Third-place match participants in the 2026 scripts come from semifinal losers (`predict_2026.py:304-310`, `monte_carlo_2026.py:180-197`).
+
+## Bottom Line
+
+The codebase is materially better than the prior review described, and many requested fixes are genuinely present. The pipeline is still not fully sound enough to trust final 2026 prediction results because the R32 third-place assignment is incomplete, 2026 country-feature coverage is sparse for several teams, and some legacy/SOTA paths still allow leakage or full-sample model selection. The country-level chronological backtest is now valid for its stated scope, but the full project should be considered **not yet merge-ready for prediction claims** until the remaining issues above are fixed and regression-tested.
+
+<details>
+<summary>Superseded prior review retained below</summary>
+
 # Code and Model Review
 
 ## Executive Summary
@@ -326,3 +555,5 @@ The strongest repeated signal is team strength: Elo, football power, prior title
 ## Bottom Line
 
 The project has promising components, especially the incremental match-state machinery, but current results are materially overstated. The 2026 predictions and Monte Carlo distributions should not be trusted until the group-stage completion, third-place bracket mapping, feature-name mismatches, and leakage in the country dataset are fixed.
+
+</details>

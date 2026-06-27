@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from itertools import combinations
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -16,11 +17,19 @@ DATA_DIR = ROOT / "data"
 
 NAME_ALIASES = {
     "West Germany": "Germany",
+    "East Germany": "Germany",
+    "German DR": "Germany",
     "Soviet Union": "Russia",
     "USSR": "Russia",
     "Yugoslavia": "Serbia",
     "Serbia and Montenegro": "Serbia",
     "Czechoslovakia": "Czech Republic",
+    "Dutch East Indies": "Indonesia",
+    "Republic of Ireland": "Ireland",
+    "Burma": "Myanmar",
+    "United Arab Republic": "Egypt",
+    "Vietnam Republic": "Vietnam",
+    "South Vietnam": "Vietnam",
     "Zaire": "DR Congo",
     "Ivory Coast": "Côte d'Ivoire",
     "Cote d'Ivoire": "Côte d'Ivoire",
@@ -65,19 +74,90 @@ GROUP_2026_TEAMS = {
     "L": ["England", "Croatia", "Ghana", "Panama"],
 }
 
-THIRD_SLOT_BY_GROUP = {
-    "D": 3,   # Match 74
-    "F": 9,   # Match 77
-    "E": 13,  # Match 79
-    "I": 15,  # Match 80
-    "B": 17,  # Match 81
-    "A": 19,  # Match 82
-    "G": 25,  # Match 85
-    "L": 29,  # Match 87
+WC_WINNERS = {
+    1930: "Uruguay",
+    1934: "Italy",
+    1938: "Italy",
+    1950: "Uruguay",
+    1954: "Germany",
+    1958: "Brazil",
+    1962: "Brazil",
+    1966: "England",
+    1970: "Brazil",
+    1974: "Germany",
+    1978: "Argentina",
+    1982: "Italy",
+    1986: "Argentina",
+    1990: "Germany",
+    1994: "Brazil",
+    1998: "France",
+    2002: "Brazil",
+    2006: "Italy",
+    2010: "Spain",
+    2014: "Germany",
+    2018: "France",
+    2022: "Argentina",
+}
+
+THIRD_SLOT_LABELS = {
+    3: "M74",
+    9: "M77",
+    13: "M79",
+    15: "M80",
+    17: "M81",
+    19: "M82",
+    25: "M85",
+    29: "M87",
+}
+THIRD_SLOT_ALLOWED_GROUPS = {
+    3: set("ABCDF"),   # 1E vs third from A/B/C/D/F
+    9: set("CDFGH"),   # 1I vs third from C/D/F/G/H
+    13: set("CEFHI"),  # 1A vs third from C/E/F/H/I
+    15: set("EHIJK"),  # 1L vs third from E/H/I/J/K
+    17: set("BEFIJ"),  # 1D vs third from B/E/F/I/J
+    19: set("AEHIJ"),  # 1G vs third from A/E/H/I/J
+    25: set("EFGIJ"),  # 1B vs third from E/F/G/I/J
+    29: set("DEIJL"),  # 1K vs third from D/E/I/J/L
 }
 THIRD_SLOTS = [3, 9, 13, 15, 17, 19, 25, 29]
 INITIAL_ELO = 1500
 K_FACTOR = 32
+
+
+def _third_place_assignment_for_combo(groups: Sequence[str]) -> Dict[str, int]:
+    """Assign third-place groups to FIFA R32 slots for one qualifying combination."""
+    remaining_groups = set(groups)
+    assignment: Dict[str, int] = {}
+
+    def search(open_slots: List[int], available: set) -> bool:
+        if not open_slots:
+            return not available
+
+        slot = min(
+            open_slots,
+            key=lambda s: (
+                len(THIRD_SLOT_ALLOWED_GROUPS[s] & available),
+                THIRD_SLOTS.index(s),
+            ),
+        )
+        candidates = sorted(THIRD_SLOT_ALLOWED_GROUPS[slot] & available)
+        for group in candidates:
+            assignment[group] = slot
+            if search([s for s in open_slots if s != slot], available - {group}):
+                return True
+            assignment.pop(group, None)
+        return False
+
+    if not search(THIRD_SLOTS.copy(), remaining_groups):
+        combo = ",".join(groups)
+        raise ValueError(f"No FIFA third-place allocation found for groups: {combo}")
+    return dict(assignment)
+
+
+THIRD_PLACE_ALLOCATION_MATRIX = {
+    combo: _third_place_assignment_for_combo(combo)
+    for combo in combinations("ABCDEFGHIJKL", 8)
+}
 
 
 def harmonize_country(name: object) -> object:
@@ -109,6 +189,17 @@ def update_elo(elo_a: float, elo_b: float, score_a: int, score_b: int, neutral: 
         elo_a + K_FACTOR * multiplier * (sa - ea),
         elo_b + K_FACTOR * multiplier * ((1 - sa) - (1 - ea)),
     )
+
+
+def finalize_world_cup_history(state, wc_year: int, participants: Iterable[str]) -> None:
+    """Update state once a World Cup has completed."""
+    teams = {harmonize_country(team) for team in participants}
+    for team in teams:
+        state[team]["wc_participations"] += 1
+
+    winner = WC_WINNERS.get(int(wc_year))
+    if winner in teams:
+        state[winner]["wc_titles"] += 1
 
 
 def compute_match_features(team, opponent, state, country_features, stage_num, match_date):
@@ -305,17 +396,15 @@ def build_round_of_32(gw: Dict[str, str], gr: Dict[str, str], best_thirds: Seque
         gr["D"], gr["G"],
     ]
 
-    placed_groups = set()
-    for group, team, *_ in best_thirds:
-        slot = THIRD_SLOT_BY_GROUP.get(group)
-        if slot is not None and r32_base[slot] is None:
-            r32_base[slot] = team
-            placed_groups.add(group)
+    third_by_group = {group: team for group, team, *_ in best_thirds}
+    combo = tuple(sorted(third_by_group))
+    try:
+        slot_by_group = THIRD_PLACE_ALLOCATION_MATRIX[combo]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported third-place group combination: {','.join(combo)}") from exc
 
-    open_slots = [slot for slot in THIRD_SLOTS if r32_base[slot] is None]
-    unplaced = [(group, team) for group, team, *_ in best_thirds if group not in placed_groups]
-    for slot, (_group, team) in zip(open_slots, unplaced):
-        r32_base[slot] = team
+    for group, slot in slot_by_group.items():
+        r32_base[slot] = third_by_group[group]
 
     missing = [slot for slot in THIRD_SLOTS if r32_base[slot] is None]
     if missing:

@@ -33,6 +33,13 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), 'output')
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# Exploratory-only target-relative columns are excluded from all modeling paths.
+DROP_COLS = [
+    'won_wc', 'runner_up', 'semifinalist', 'finalist', 'top4',
+    'is_winner', 'iso3', 'country', 'wc_year', 'decade',
+    'gdp_per_capita_vs_winner', 'population_vs_winner',
+]
+
 # ============================================================
 # LOAD DATA
 # ============================================================
@@ -58,8 +65,7 @@ def univariate_analysis(df):
     others = df[df['won_wc'] == 0]
 
     # All numeric potential predictors
-    exclude = ['won_wc', 'runner_up', 'semifinalist', 'finalist', 'top4',
-               'is_winner', 'iso3', 'country', 'wc_year', 'decade']
+    exclude = DROP_COLS
     numeric_cols = [c for c in df.select_dtypes(include=[np.number]).columns
                     if c not in exclude]
 
@@ -131,8 +137,7 @@ def correlation_analysis(df):
     print("ANALYSIS 2: CORRELATION WITH WINNING")
     print("="*80)
 
-    exclude = ['won_wc', 'runner_up', 'semifinalist', 'finalist', 'top4',
-               'is_winner', 'iso3', 'country', 'wc_year', 'decade']
+    exclude = DROP_COLS
     numeric_cols = [c for c in df.select_dtypes(include=[np.number]).columns
                     if c not in exclude]
 
@@ -172,9 +177,7 @@ def logistic_regression_analysis(df):
     print("ANALYSIS 3: LOGISTIC REGRESSION")
     print("="*80)
 
-    exclude = ['won_wc', 'runner_up', 'semifinalist', 'finalist', 'top4',
-               'is_winner', 'iso3', 'country', 'wc_year', 'decade',
-               'confederation']
+    exclude = DROP_COLS + ['confederation']
     numeric_cols = [c for c in df.select_dtypes(include=[np.number]).columns
                     if c not in exclude]
 
@@ -296,9 +299,7 @@ def random_forest_analysis(df):
     print("ANALYSIS 4: RANDOM FOREST FEATURE IMPORTANCE")
     print("="*80)
 
-    exclude = ['won_wc', 'runner_up', 'semifinalist', 'finalist', 'top4',
-               'is_winner', 'iso3', 'country', 'wc_year', 'decade',
-               'confederation']
+    exclude = DROP_COLS + ['confederation']
     numeric_cols = [c for c in df.select_dtypes(include=[np.number]).columns
                     if c not in exclude]
 
@@ -355,9 +356,7 @@ def xgboost_analysis(df):
     print("ANALYSIS 5: XGBOOST FEATURE IMPORTANCE")
     print("="*80)
 
-    exclude = ['won_wc', 'runner_up', 'semifinalist', 'finalist', 'top4',
-               'is_winner', 'iso3', 'country', 'wc_year', 'decade',
-               'confederation']
+    exclude = DROP_COLS + ['confederation']
     numeric_cols = [c for c in df.select_dtypes(include=[np.number]).columns
                     if c not in exclude]
 
@@ -401,9 +400,7 @@ def lasso_analysis(df):
     print("ANALYSIS 6: LASSO FEATURE SELECTION")
     print("="*80)
 
-    exclude = ['won_wc', 'runner_up', 'semifinalist', 'finalist', 'top4',
-               'is_winner', 'iso3', 'country', 'wc_year', 'decade',
-               'confederation']
+    exclude = DROP_COLS + ['confederation']
     numeric_cols = [c for c in df.select_dtypes(include=[np.number]).columns
                     if c not in exclude]
 

@@ -20,6 +20,7 @@ from shared import (
     compute_match_features,
     country_features_for_year,
     fit_xgb_with_validation,
+    finalize_world_cup_history,
     harmonize_country,
     load_country_feature_history,
     rank_third_place_teams,
@@ -136,12 +137,20 @@ def main():
 
     rows, labels = [], []
     country_feature_cache = {}
+    active_wc_year = None
+    active_wc_teams = set()
     for _, r in df.iterrows():
         ht, at = harmonize(r['home_team']), harmonize(r['away_team'])
         hs, aw = r['home_score'], r['away_score']
         if pd.isna(hs) or pd.isna(aw): continue
         hs, aw = int(hs), int(aw)
         feature_year = int(r['date'].year)
+        is_world_cup = r['tournament'] == 'FIFA World Cup'
+        if active_wc_year is not None and (not is_world_cup or feature_year != active_wc_year):
+            finalize_world_cup_history(state, active_wc_year, active_wc_teams)
+            active_wc_year = None
+            active_wc_teams = set()
+
         if feature_year not in country_feature_cache:
             country_feature_cache[feature_year] = country_features_for_year(country_history, feature_year)
         rows.append(compute_features(ht, at, state, country_feature_cache[feature_year], 0, r['date']))
@@ -169,10 +178,16 @@ def main():
         state[ht]['h2h'][h2h_key]['ga'] += aw
         state[at]['h2h'][h2h_key]['gf'] += aw
         state[at]['h2h'][h2h_key]['ga'] += hs
-        if r['tournament'] == 'FIFA World Cup':
+        if is_world_cup:
+            if active_wc_year is None:
+                active_wc_year = feature_year
+            active_wc_teams.update([ht, at])
             for t in [ht, at]: state[t]['wc_matches'] += 1
             if hs > aw: state[ht]['wc_wins'] += 1
             elif hs < aw: state[at]['wc_wins'] += 1
+
+    if active_wc_year is not None:
+        finalize_world_cup_history(state, active_wc_year, active_wc_teams)
 
     X = pd.DataFrame(rows).fillna(0)
     y = np.array(labels)

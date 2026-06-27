@@ -60,20 +60,21 @@ WC_HOSTS = {
 
 # Country name to ISO3 mapping (comprehensive)
 COUNTRY_TO_ISO3 = {
+    'Algeria': 'DZA',
     'Argentina': 'ARG', 'Australia': 'AUS', 'Austria': 'AUT',
     'Belgium': 'BEL', 'Bolivia': 'BOL', 'Bosnia and Herzegovina': 'BIH',
     'Brazil': 'BRA', 'Bulgaria': 'BGR', 'Cameroon': 'CMR',
     'Canada': 'CAN', 'Chile': 'CHL', 'China': 'CHN',
     'Colombia': 'COL', 'Costa Rica': 'CRC', 'Croatia': 'HRV',
     'Cuba': 'CUB', 'Czech Republic': 'CZE', 'Czechoslovakia': 'CZE',
-    'Denmark': 'DEN', 'Ecuador': 'ECU', 'Egypt': 'EGY',
+    'Burma': 'MMR', 'Denmark': 'DEN', 'Ecuador': 'ECU', 'Egypt': 'EGY',
     'El Salvador': 'SLV', 'England': 'ENG', 'France': 'FRA',
     'Germany': 'DEU', 'Ghana': 'GHA', 'Greece': 'GRC',
     'Honduras': 'HND', 'Hungary': 'HUN', 'Iceland': 'ISL',
-    'Indonesia': 'IDN', 'Iran': 'IRN', 'IR Iran': 'IRN', 'Iraq': 'IRQ',
-    'Ireland': 'IRL', 'Israel': 'ISR', 'Italy': 'ITA',
+    'Dutch East Indies': 'IDN', 'Indonesia': 'IDN', 'Iran': 'IRN', 'IR Iran': 'IRN', 'Iraq': 'IRQ',
+    'Ireland': 'IRL', 'Republic of Ireland': 'IRL', 'Israel': 'ISR', 'Italy': 'ITA',
     'Ivory Coast': 'CIV', 'Jamaica': 'JAM', 'Japan': 'JPN',
-    'Kuwait': 'KWT', 'Mexico': 'MEX', 'Morocco': 'MAR',
+    'Kuwait': 'KWT', 'Mexico': 'MEX', 'Morocco': 'MAR', 'Myanmar': 'MMR',
     'Netherlands': 'NLD', 'New Zealand': 'NZL', 'Nigeria': 'NGA',
     'North Korea': 'PRK', 'Korea DPR': 'PRK', 'Northern Ireland': 'NIR', 'Norway': 'NOR',
     'Panama': 'PAN', 'Paraguay': 'PRY', 'Peru': 'PER',
@@ -86,8 +87,9 @@ COUNTRY_TO_ISO3 = {
     'Sweden': 'SWE', 'Switzerland': 'CHE', 'Togo': 'TGO',
     'Trinidad and Tobago': 'TTO', 'Tunisia': 'TUN',
     'Turkey': 'TUR', 'UAE': 'ARE', 'Ukraine': 'UKR',
+    'United Arab Republic': 'EGY',
     'United States': 'USA', 'USA': 'USA', 'Uruguay': 'URY', 'Wales': 'WAL',
-    'West Germany': 'DEU', 'Yugoslavia': 'SRB',
+    'West Germany': 'DEU', 'German DR': 'DEU', 'Yugoslavia': 'SRB',
     'Zaire': 'COD', 'East Germany': 'DEU',
     'South Korea/Japan': 'KOR',  # host entry
     'United Arab Emirates': 'ARE',
@@ -97,6 +99,7 @@ COUNTRY_TO_ISO3 = {
     'Côte d\'Ivoire': 'CIV',
     'Cape Verde': 'CPV', 'Curaçao': 'CUW', 'Curacao': 'CUW',
     'Uzbekistan': 'UZB', 'Jordan': 'JOR',
+    'Vietnam': 'VNM', 'Vietnam Republic': 'VNM', 'South Vietnam': 'VNM',
 }
 
 # All World Cup participants by year (comprehensive list)
@@ -675,7 +678,7 @@ def get_confederation(iso3):
     conmebol = ['ARG','BOL','BRA','CHL','COL','ECU','PRY','PER','URY','VEN']
     concacaf = ['CAN','CRC','CUB','SLV','GTM','HND','JAM','MEX','PAN',
                 'TRI','USA','HAI','NIC','BER','GRN','DMA','LCA','VIN']
-    caf = ['ALG','ANG','BEN','BOT','BFA','BDI','CMR','CPV','CTA','CHA',
+    caf = ['ALG','DZA','ANG','BEN','BOT','BFA','BDI','CMR','CPV','CTA','CHA',
            'COM','CGO','COD','CIV','DJI','EGY','GNQ','ERI','SWZ','ETH',
            'GAB','GMB','GHA','GIN','GNB','KEN','LSO','LBR','LBY','MAD',
            'MWI','MLI','MRT','MUS','MAR','MOZ','NAM','NER','NGA','RWA',
@@ -683,9 +686,9 @@ def get_confederation(iso3):
            'TUN','UGA','ZAM','ZWE']
     afc = ['AFG','AUS','BHR','BAN','BTN','BRN','CAM','CHN','TWN','HKG',
            'IND','IDN','IRN','IRQ','JPN','JOR','KOR','PRK','KWT','KGZ',
-           'LAO','LBN','MAC','MYS','MDV','MNG','MYA','NPL','OMN','PAK',
+           'LAO','LBN','MAC','MYS','MDV','MNG','MMR','MYA','NPL','OMN','PAK',
            'PHL','QAT','SAU','SGP','LKA','SYR','TJK','THA','TLS','TKM',
-           'UAE','UZB','VIE','YEM']
+           'UAE','UZB','VIE','VNM','YEM']
     ofc = ['ASA','COK','FIJ','NCL','NZL','PNG','SAM','SOL','TAH','TGA','VAN']
 
     if iso3 in uefa: return 'UEFA'
