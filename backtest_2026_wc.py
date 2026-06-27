@@ -18,6 +18,7 @@ import pandas as pd
 
 from shared import (
     INITIAL_ELO,
+    KNOCKOUT_ALPHA,
     DATA_DIR,
     load_country_feature_history,
     load_betting_odds,
@@ -200,9 +201,10 @@ def predict_match(model, feature_names, home, away, state, cf, stage, date,
     X = prepare_prediction_frame(feat, feature_names)
     probs = np.asarray(model.predict_proba(X)[0], dtype=float)
 
-    if poisson_model is not None and alpha < 1.0:
+    blend_alpha = KNOCKOUT_ALPHA if stage > 0 else alpha
+    if poisson_model is not None and blend_alpha < 1.0:
         p_pois = poisson_model.outcome_probs(home, away, neutral=neutral)
-        probs = blend_probabilities(probs, p_pois, alpha)
+        probs = blend_probabilities(probs, p_pois, blend_alpha)
 
     # Knockout: renormalize away the draw probability.
     if stage > 0:
@@ -275,8 +277,8 @@ def run_backtest():
     # Prepare 2026 state
     state = prepare_2026_state(state, results_df)
 
-    # Get country features for 2022 (latest available)
-    cf = country_features_for_year(country_history, 2022)
+    # Get the latest feature vintage available for the 2026 prediction year.
+    cf = country_features_for_year(country_history, 2026)
 
     # Get all 2026 WC matches with scores, sorted chronologically
     results_df["date"] = pd.to_datetime(results_df["date"])

@@ -6,18 +6,23 @@ Uses correct Wikipedia standings + proper FIFA bracket.
 import pandas as pd
 import numpy as np
 import xgboost as xgb
+import argparse
 from dataclasses import dataclass
 from collections import defaultdict
-from typing import Any
+from typing import Any, Optional
 import warnings
 from shared import (
     GROUP_2026_TEAMS,
+    KNOCKOUT_ALPHA,
+    ODDS_FEATURE_COLUMNS,
     WC2026_STAGE_TO_TRAIN,
+    apply_wc_knockout_calibration,
     apply_group_result,
     apply_match_to_state,
     build_2026_group_state,
     build_round_of_32,
     compute_match_features,
+    country_feature_staleness_warnings,
     country_features_for_year,
     fit_xgb_with_validation,
     finalize_world_cup_history,
@@ -36,6 +41,7 @@ from shared import (
     parse_bool,
     rank_third_place_teams,
     sorted_group_standings,
+    wc_calibration_buckets,
     update_elo,
 )
 warnings.filterwarnings('ignore')
@@ -60,6 +66,29 @@ class PredictionBundle:
     poisson_model: Any = None
     alpha: float = 1.0
     squad_values: dict = None
+
+
+@dataclass
+class PredictionDetails:
+    winner: Optional[str]
+    confidence: float
+    p_home: float
+    p_draw: float
+    p_away: float
+    raw_home: float
+    raw_draw: float
+    raw_away: float
+    conditional_home: float
+    conditional_away: float
+    xgb_home: float
+    xgb_draw: float
+    xgb_away: float
+    dc_home: Optional[float]
+    dc_draw: Optional[float]
+    dc_away: Optional[float]
+    blend_alpha: float
+    odds_missing: bool
+    calibration_note: str = ""
 
 
 def compute_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False, odds_row=None, squad_values=None):
@@ -158,7 +187,7 @@ def train_model_bundle(results_df, country_history, exclude_2026_wc=True, odds=N
         train_X=X,
         train_y=y,
         country_history=country_history,
-        country_features=country_features_for_year(country_history, 2022),
+        country_features=country_features_for_year(country_history, 2026),
         odds=odds,
         poisson_model=poisson_model,
         alpha=alpha,
@@ -180,6 +209,7 @@ _ODDS = None
 _POISSON = None
 _ALPHA = 1.0
 _SQUAD_VALUES = None
+_WC_CALIBRATION_BUCKETS = []
 
 def prepare_2026_state(results, state):
     wc26 = results[(results['tournament'] == 'FIFA World Cup') &
@@ -195,24 +225,48 @@ def prepare_2026_state(results, state):
     return state
 
 def load_country_features():
-    return country_features_for_year(load_country_feature_history(), 2022)
+    return country_features_for_year(load_country_feature_history(), 2026)
 
 def update_state(state, ta, tb, sa, sb, date, neutral=True):
     # All 2026 fixtures handled here are World Cup matches.
     apply_match_to_state(state, ta, tb, sa, sb, date, neutral=neutral, is_world_cup=True)
 
-def predict(model, fl, ta, tb, state, cf, stage, date, neutral=True, is_home=False):
+def _alpha_for_stage(stage: int) -> float:
+    return KNOCKOUT_ALPHA if stage > 0 else _ALPHA
+
+
+def _odds_missing(odds_row: dict) -> bool:
+    return any(not np.isfinite(float(odds_row.get(col, np.nan))) for col in ODDS_FEATURE_COLUMNS)
+
+
+def predict_with_details(model, fl, ta, tb, state, cf, stage, date, neutral=True, is_home=False):
     ha, hb = harmonize(ta), harmonize(tb)
     odds_row = odds_features_for_match(_ODDS, date, ha, hb)
     feat = compute_features(ha, hb, state, cf, stage, date, neutral, is_home, odds_row, _SQUAD_VALUES)
     X = prepare_prediction_frame(feat, fl)
-    probs = np.asarray(model.predict_proba(X)[0], dtype=float)
-    if _POISSON is not None and _ALPHA < 1.0:
-        probs = blend_probabilities(probs, _POISSON.outcome_probs(ha, hb, neutral=neutral), _ALPHA)
+    p_xgb = np.asarray(model.predict_proba(X)[0], dtype=float)
+    probs = p_xgb.copy()
+    p_dc = None
+    alpha = _alpha_for_stage(stage)
+    if _POISSON is not None and alpha < 1.0:
+        p_dc = _POISSON.outcome_probs(ha, hb, neutral=neutral)
+        probs = blend_probabilities(probs, p_dc, alpha)
     pa, pd_, pb = probs[0], probs[1], probs[2]
+    conditional_home, conditional_away = pa, pb
+    calibration_note = ""
     # Group stage: allow draw if it's the most likely outcome
     if stage == 0 and pd_ >= pa and pd_ >= pb:
-        return None, pd_, pa, pd_, pb
+        return PredictionDetails(
+            winner=None, confidence=float(pd_), p_home=float(pa), p_draw=float(pd_), p_away=float(pb),
+            raw_home=float(pa), raw_draw=float(pd_), raw_away=float(pb),
+            conditional_home=float(pa), conditional_away=float(pb),
+            xgb_home=float(p_xgb[0]), xgb_draw=float(p_xgb[1]), xgb_away=float(p_xgb[2]),
+            dc_home=float(p_dc[0]) if p_dc is not None else None,
+            dc_draw=float(p_dc[1]) if p_dc is not None else None,
+            dc_away=float(p_dc[2]) if p_dc is not None else None,
+            blend_alpha=float(alpha), odds_missing=_odds_missing(odds_row),
+            calibration_note=calibration_note,
+        )
     # Knockout stages: no draw possible, renormalize to P(home|no draw), P(away|no draw)
     if stage > 0:
         total = pa + pb
@@ -221,18 +275,51 @@ def predict(model, fl, ta, tb, state, cf, stage, date, neutral=True, is_home=Fal
             pb_cond = pb / total
         else:
             pa_cond, pb_cond = 0.5, 0.5
+        conditional_home, conditional_away = pa_cond, pb_cond
+        pa_final, pb_final, calibration_note = apply_wc_knockout_calibration(
+            pa_cond, pb_cond, _WC_CALIBRATION_BUCKETS,
+        )
         winner = ta if pa_cond >= pb_cond else tb
-        return winner, max(pa_cond, pb_cond), pa_cond, pd_, pb_cond
+        return PredictionDetails(
+            winner=winner, confidence=float(max(pa_final, pb_final)),
+            p_home=float(pa_final), p_draw=float(pd_), p_away=float(pb_final),
+            raw_home=float(pa), raw_draw=float(pd_), raw_away=float(pb),
+            conditional_home=float(pa_cond), conditional_away=float(pb_cond),
+            xgb_home=float(p_xgb[0]), xgb_draw=float(p_xgb[1]), xgb_away=float(p_xgb[2]),
+            dc_home=float(p_dc[0]) if p_dc is not None else None,
+            dc_draw=float(p_dc[1]) if p_dc is not None else None,
+            dc_away=float(p_dc[2]) if p_dc is not None else None,
+            blend_alpha=float(alpha), odds_missing=_odds_missing(odds_row),
+            calibration_note=calibration_note,
+        )
     winner = ta if pa >= pb else tb
-    return winner, max(pa, pb), pa, pd_, pb
+    return PredictionDetails(
+        winner=winner, confidence=float(max(pa, pb)), p_home=float(pa), p_draw=float(pd_), p_away=float(pb),
+        raw_home=float(pa), raw_draw=float(pd_), raw_away=float(pb),
+        conditional_home=float(conditional_home), conditional_away=float(conditional_away),
+        xgb_home=float(p_xgb[0]), xgb_draw=float(p_xgb[1]), xgb_away=float(p_xgb[2]),
+        dc_home=float(p_dc[0]) if p_dc is not None else None,
+        dc_draw=float(p_dc[1]) if p_dc is not None else None,
+        dc_away=float(p_dc[2]) if p_dc is not None else None,
+        blend_alpha=float(alpha), odds_missing=_odds_missing(odds_row),
+        calibration_note=calibration_note,
+    )
 
-def simulate_round(matches, name, stage, state, model, fl, cf, date):
+
+def predict(model, fl, ta, tb, state, cf, stage, date, neutral=True, is_home=False):
+    details = predict_with_details(model, fl, ta, tb, state, cf, stage, date, neutral, is_home)
+    return details.winner, details.confidence, details.p_home, details.p_draw, details.p_away
+
+def simulate_round(matches, name, stage, state, model, fl, cf, date, debug=False):
     print(f"\n{'=' * 70}")
     print(f"{name}")
     print(f"{'=' * 70}")
     winners = []
     for label, ta, tb in matches:
-        winner, prob, pa, pd_, pb = predict(model, fl, ta, tb, state, cf, stage, date)
+        details = predict_with_details(model, fl, ta, tb, state, cf, stage, date)
+        winner, prob, pa, pd_, pb = (
+            details.winner, details.confidence, details.p_home, details.p_draw, details.p_away
+        )
         winners.append(winner)
         if winner == ta:
             update_state(state, ta, tb, 2, 1, date)
@@ -240,12 +327,46 @@ def simulate_round(matches, name, stage, state, model, fl, cf, date):
             update_state(state, ta, tb, 1, 2, date)
         print(f"  {label}: {ta} vs {tb}")
         if stage > 0:
-            print(f"    → ✅ {winner} ({prob:.1%})  [P({ta})={pa:.1%} P({tb})={pb:.1%}] (knockout: no draw)")
+            print(f"    → ✅ {winner} ({prob:.1%})  [WC-calibrated P({ta})={pa:.1%} P({tb})={pb:.1%}]")
+            print(
+                f"      raw 3-way: P({ta})={details.raw_home:.1%} "
+                f"P(draw)={details.raw_draw:.1%} P({tb})={details.raw_away:.1%}"
+            )
+            print(
+                f"      knockout no-draw: P({ta})={details.conditional_home:.1%} "
+                f"P({tb})={details.conditional_away:.1%}; blend alpha={details.blend_alpha:.2f}"
+            )
+            if details.calibration_note:
+                print(f"      calibration: {details.calibration_note}")
+            if details.odds_missing:
+                print("      WARNING: betting odds are unavailable; this prediction is less market-informed.")
+            if debug:
+                dc_text = (
+                    f"P({ta})={details.dc_home:.1%} P(draw)={details.dc_draw:.1%} P({tb})={details.dc_away:.1%}"
+                    if details.dc_home is not None else "unavailable"
+                )
+                print(
+                    f"      XGBoost raw: P({ta})={details.xgb_home:.1%} "
+                    f"P(draw)={details.xgb_draw:.1%} P({tb})={details.xgb_away:.1%}"
+                )
+                print(f"      Dixon-Coles raw: {dc_text}")
         else:
             print(f"    → ✅ {winner} ({prob:.1%})  [P({ta})={pa:.1%} P(draw)={pd_:.1%} P({tb})={pb:.1%}]")
     return winners
 
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Predict the 2026 FIFA World Cup bracket.")
+    parser.add_argument(
+        "--debug",
+        "--verbose",
+        action="store_true",
+        help="Print model-component probabilities for knockout matches.",
+    )
+    return parser.parse_args()
+
 def main():
+    args = parse_args()
     print("=" * 70)
     print("🏆 2026 FIFA WORLD CUP PREDICTOR")
     print("=" * 70)
@@ -253,11 +374,24 @@ def main():
     print("\n[1/4] Loading data...")
     results = pd.read_csv('data/results.csv')
     country_history = load_country_feature_history()
-    cf = country_features_for_year(country_history, 2022)
+    cf = country_features_for_year(country_history, 2026)
     print(f"  {len(results)} matches, {len(cf)} countries with features")
+    stale_notes = country_feature_staleness_warnings(
+        cf,
+        [team for teams in GROUP_2026_TEAMS.values() for team in teams],
+        2026,
+    )
+    for note in stale_notes:
+        print(f"  WARNING: {note}")
     
     print("[2/4] Training model...")
     model, state, fl, _train_X, _train_y = train_model(results, country_history)
+    global _WC_CALIBRATION_BUCKETS
+    _WC_CALIBRATION_BUCKETS = wc_calibration_buckets()
+    if _WC_CALIBRATION_BUCKETS:
+        print(f"  Loaded {len(_WC_CALIBRATION_BUCKETS)} World Cup calibration buckets")
+    else:
+        print("  WARNING: World Cup calibration buckets unavailable; knockout probabilities are uncalibrated")
     
     print("[3/4] Processing completed 2026 WC matches...")
     before_matches = sum(state[t]['wc_matches'] for t in state)
@@ -284,9 +418,12 @@ def main():
         ha, at = harmonize(home), harmonize(away)
         # The 2026 hosts (USA, Canada, Mexico) get genuine home advantage at home.
         home_is_host = ha in WC2026_HOSTS
-        winner, prob, pa, pd_, pb = predict(
+        details = predict_with_details(
             model, fl, home, away, state, cf, 0, date,
             neutral=not home_is_host, is_home=home_is_host,
+        )
+        winner, prob, pa, pd_, pb = (
+            details.winner, details.confidence, details.p_home, details.p_draw, details.p_away
         )
         if winner == home:
             sa, sb = 2, 1
@@ -331,7 +468,7 @@ def main():
     # === KNOCKOUT BRACKET ===
     r32 = build_round_of_32(gw, gr, best8)
     
-    r32_w = simulate_round(r32, "ROUND OF 32", WC2026_STAGE_TO_TRAIN["round_of_32"], state, model, fl, cf, pd.Timestamp('2026-06-29'))
+    r32_w = simulate_round(r32, "ROUND OF 32", WC2026_STAGE_TO_TRAIN["round_of_32"], state, model, fl, cf, pd.Timestamp('2026-06-29'), debug=args.debug)
     
     # FIFA bracket R16 pairings (from Wikipedia — NON-SEQUENTIAL crossover!)
     # M89: W73 vs W75 | M90: W74 vs W77 | M91: W76 vs W78 | M92: W79 vs W80
@@ -348,7 +485,7 @@ def main():
         ('R16 M95', r32_w[13], r32_w[15]), # W86 vs W88  (Argentina vs Belgium)
         ('R16 M96', r32_w[12], r32_w[14]), # W85 vs W87  (Switzerland vs Portugal)
     ]
-    r16_w = simulate_round(r16, "ROUND OF 16", WC2026_STAGE_TO_TRAIN["round_of_16"], state, model, fl, cf, pd.Timestamp('2026-07-04'))
+    r16_w = simulate_round(r16, "ROUND OF 16", WC2026_STAGE_TO_TRAIN["round_of_16"], state, model, fl, cf, pd.Timestamp('2026-07-04'), debug=args.debug)
     
     # QF: M97: W89 vs W90 | M98: W93 vs W94 | M99: W91 vs W92 | M100: W95 vs W96
     # Bracket: (89/90 side) vs (93/94 side) → SF101, (91/92 side) vs (95/96 side) → SF102
@@ -358,7 +495,7 @@ def main():
         ('QF M99', r16_w[2], r16_w[3]),  # W91 vs W92 (left-bot: Brazil path vs Mexico/England)
         ('QF M100', r16_w[6], r16_w[7]), # W95 vs W96 (right-bot: Argentina/Bel vs Swi/Port)
     ]
-    qf_w = simulate_round(qf, "QUARTERFINALS", WC2026_STAGE_TO_TRAIN["quarterfinal"], state, model, fl, cf, pd.Timestamp('2026-07-09'))
+    qf_w = simulate_round(qf, "QUARTERFINALS", WC2026_STAGE_TO_TRAIN["quarterfinal"], state, model, fl, cf, pd.Timestamp('2026-07-09'), debug=args.debug)
     
     # SF: M101: W97 vs W98 | M102: W99 vs W100
     # Germany side (QF97/98) vs Brazil side (QF99/100) → they can only meet in FINAL
@@ -366,21 +503,26 @@ def main():
         ('SF M101', qf_w[0], qf_w[1]),  # left side (Germany's half)
         ('SF M102', qf_w[2], qf_w[3]),  # right side (Brazil's half)
     ]
-    sf_w = simulate_round(sf, "SEMIFINALS", WC2026_STAGE_TO_TRAIN["semifinal"], state, model, fl, cf, pd.Timestamp('2026-07-14'))
+    sf_w = simulate_round(sf, "SEMIFINALS", WC2026_STAGE_TO_TRAIN["semifinal"], state, model, fl, cf, pd.Timestamp('2026-07-14'), debug=args.debug)
     
     # 3rd place: L101 vs L102
     sf_losers = [qf_w[i] for i in range(4) if qf_w[i] not in sf_w]
     print(f"\n{'=' * 70}")
     print("THIRD PLACE MATCH")
     print(f"{'=' * 70}")
-    third, tp, _, _, _ = predict(model, fl, sf_losers[0], sf_losers[1], state, cf, WC2026_STAGE_TO_TRAIN["third_place"], pd.Timestamp('2026-07-18'))
+    third_details = predict_with_details(model, fl, sf_losers[0], sf_losers[1], state, cf, WC2026_STAGE_TO_TRAIN["third_place"], pd.Timestamp('2026-07-18'))
+    third, tp = third_details.winner, third_details.confidence
     print(f"  {sf_losers[0]} vs {sf_losers[1]} → {third} ({tp:.1%})")
     
     # FINAL
     print(f"\n{'=' * 70}")
     print("🏆 FINAL 🏆")
     print(f"{'=' * 70}")
-    champion, cp, pa, pd_, pb = predict(model, fl, sf_w[0], sf_w[1], state, cf, WC2026_STAGE_TO_TRAIN["final"], pd.Timestamp('2026-07-19'))
+    final_details = predict_with_details(model, fl, sf_w[0], sf_w[1], state, cf, WC2026_STAGE_TO_TRAIN["final"], pd.Timestamp('2026-07-19'))
+    champion, cp, pa, pd_, pb = (
+        final_details.winner, final_details.confidence,
+        final_details.p_home, final_details.p_draw, final_details.p_away,
+    )
     runner_up = sf_w[1] if champion == sf_w[0] else sf_w[0]
     fourth = sf_losers[1] if third == sf_losers[0] else sf_losers[0]
     

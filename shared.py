@@ -156,6 +156,13 @@ THIRD_SLOTS = [3, 9, 13, 15, 17, 19, 25, 29]
 INITIAL_ELO = 1500
 K_FACTOR = 32
 STAGE_TO_INT = {"group": 0, "round_of_16": 1, "quarterfinal": 2, "semifinal": 3, "final": 4}
+# Blend weight used by ``blend_probabilities`` for knockout matches. In this
+# codebase alpha is the XGBoost weight, so 0.50 means a conservative 50/50
+# XGBoost / Dixon-Coles blend after group-stage probabilities are unchanged.
+KNOCKOUT_ALPHA = 0.50
+H2H_YEARS_LIMIT = 15
+H2H_HALF_LIFE_YEARS = 10
+COUNTRY_FEATURE_STALE_YEARS = 8
 
 # Rolling window length for form / goals (kept identical across every script so the
 # features the model is trained on match the features used at prediction time).
@@ -256,7 +263,10 @@ def make_team_state() -> Dict[str, object]:
         "elo_history": [],          # Elo value AFTER each match (chronological)
         "opp_elo": [],              # opponent Elo BEFORE each match (chronological)
         "match_dates": [],          # date of each rolling match (chronological)
-        "h2h": defaultdict(lambda: {"matches": 0, "wins": 0, "draws": 0, "losses": 0, "gf": 0, "ga": 0}),
+        "h2h": defaultdict(lambda: {
+            "matches": 0, "wins": 0, "draws": 0, "losses": 0, "gf": 0, "ga": 0,
+            "entries": [],
+        }),
         "wc_participations": 0,
         "wc_titles": 0,
         "wc_wins": 0,
@@ -311,6 +321,12 @@ def update_team_state(
         rec["losses"] += 1
     rec["gf"] += gf
     rec["ga"] += ga
+    rec.setdefault("entries", []).append({
+        "date": match_date,
+        "result": result,
+        "gf": gf,
+        "ga": ga,
+    })
 
     if is_world_cup:
         s["wc_matches"] += 1
@@ -408,6 +424,41 @@ def _matches_in_window(state_entry, match_date, days: int) -> int:
     return count
 
 
+def _weighted_h2h_record(record: dict, match_date) -> dict:
+    """Return recency-weighted H2H stats from one team's perspective.
+
+    The historical aggregate is retained for backward compatibility, but when
+    per-match entries are available we only use the last ``H2H_YEARS_LIMIT``
+    years and exponentially decay them with a 10-year half-life.
+    """
+    entries = record.get("entries") or []
+    if not entries:
+        return dict(record)
+    try:
+        current_date = pd.to_datetime(match_date)
+    except Exception:
+        current_date = pd.Timestamp.max
+    cutoff = current_date - pd.DateOffset(years=H2H_YEARS_LIMIT)
+    weighted = {"matches": 0.0, "wins": 0.0, "draws": 0.0, "losses": 0.0, "gf": 0.0, "ga": 0.0}
+    for item in entries:
+        try:
+            item_date = pd.to_datetime(item.get("date"))
+        except Exception:
+            item_date = pd.NaT
+        if pd.isna(item_date) or item_date < cutoff or item_date >= current_date:
+            continue
+        age_years = max((current_date - item_date).days / 365.25, 0.0)
+        weight = 0.5 ** (age_years / H2H_HALF_LIFE_YEARS)
+        result = float(item.get("result", 0.5))
+        weighted["matches"] += weight
+        weighted["wins"] += weight if result == 1 else 0.0
+        weighted["draws"] += weight if result == 0.5 else 0.0
+        weighted["losses"] += weight if result == 0 else 0.0
+        weighted["gf"] += weight * float(item.get("gf", 0.0))
+        weighted["ga"] += weight * float(item.get("ga", 0.0))
+    return weighted
+
+
 def compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False, odds_row=None, squad_values=None):
     s, o = state[team], state[opponent]
     form = s["form"][-10:] if s["form"] else [0.5]
@@ -421,6 +472,7 @@ def compute_match_features(team, opponent, state, country_features, stage_num, m
     rest = min((match_date - s["last_match"]).days if s["last_match"] else 30, 60)
     h2h_key = tuple(sorted([team, opponent]))
     h = s["h2h"].get(h2h_key, {"matches": 0, "wins": 0, "draws": 0, "losses": 0, "gf": 0, "ga": 0})
+    h = _weighted_h2h_record(h, match_date)
     hm = max(h["matches"], 1)
     cf, oc = country_features.get(team, {}), country_features.get(opponent, {})
 
@@ -755,29 +807,155 @@ def squad_value_for_team(
 def load_country_feature_history(
     path: Path = DATA_DIR / "world_cup_predictors_dataset.csv",
 ) -> Dict[str, Dict[int, Dict[str, float]]]:
-    """Load country features keyed by canonical team and World Cup year."""
+    """Load country features keyed by canonical team and data year.
+
+    The source column is named ``wc_year`` because the original dataset was
+    World-Cup-edition based, but callers should treat it as a feature vintage.
+    If newer non-WC rows are added later (for example 2023/2024 country data),
+    they will be eligible for 2026 lookups automatically.
+    """
     df = pd.read_csv(path)
     history: Dict[str, Dict[int, Dict[str, float]]] = {}
     for _, row in df.iterrows():
         team = harmonize_country(row["country"])
         year = int(row["wc_year"])
-        history.setdefault(team, {})[year] = {
+        entry = {
             col: row.get(col, np.nan) for col in COUNTRY_FEATURE_COLUMNS
         }
+        entry["feature_year"] = year
+        history.setdefault(team, {})[year] = entry
     return history
 
 
 def country_features_for_year(
     history: Dict[str, Dict[int, Dict[str, float]]], year: int
 ) -> Dict[str, Dict[str, float]]:
-    """Return latest known country features at or before ``year`` for each team."""
+    """Return latest known country features at or before ``year`` for each team.
+
+    Feature vintages older than ``COUNTRY_FEATURE_STALE_YEARS`` are retained but
+    explicitly flagged via ``country_features_stale`` and ``feature_age_years``.
+    That keeps predictions possible while making cases such as 2026 Norway using
+    1998 country data visible to reports and CLIs.
+    """
     features: Dict[str, Dict[str, float]] = {}
     for team, by_year in history.items():
         usable = [wc_year for wc_year in by_year if wc_year <= year]
         if not usable:
             continue
-        features[team] = by_year[max(usable)]
+        feature_year = max(usable)
+        entry = dict(by_year[feature_year])
+        age = int(year) - int(feature_year)
+        entry["feature_year"] = feature_year
+        entry["feature_age_years"] = age
+        entry["country_features_stale"] = int(age > COUNTRY_FEATURE_STALE_YEARS)
+        features[team] = entry
     return features
+
+
+def country_feature_staleness_warnings(
+    features: Dict[str, Dict[str, float]],
+    teams: Iterable[str],
+    target_year: int,
+) -> List[str]:
+    """Human-readable warnings for stale country feature vintages."""
+    warnings: List[str] = []
+    for team in sorted({harmonize_country(t) for t in teams}):
+        entry = features.get(team)
+        if not entry:
+            warnings.append(f"{team}: no country feature row available for {target_year}.")
+            continue
+        if int(entry.get("country_features_stale", 0)):
+            fy = entry.get("feature_year", "unknown")
+            age = entry.get("feature_age_years", "unknown")
+            warnings.append(f"{team}: country features are from {fy} ({age} years old for {target_year}).")
+    return warnings
+
+
+def wc_calibration_buckets(
+    path: Path = ROOT / "backtest_walkforward_results.csv",
+    bucket_size: float = 0.10,
+) -> List[dict]:
+    """Compute World-Cup-only top-prediction calibration buckets.
+
+    Returns one dict per confidence bucket with ``n``, average confidence,
+    empirical accuracy and smoothed accuracy. The smoothed value is conservative:
+    sparse buckets are pulled toward their own average confidence instead of
+    overreacting to one or two historical examples.
+    """
+    path = Path(path)
+    if not path.exists():
+        return []
+    try:
+        df = pd.read_csv(path)
+    except Exception:
+        return []
+    required = {"tournament", "confidence", "correct"}
+    if not required.issubset(df.columns):
+        return []
+    wc = df[df["tournament"].astype(str).eq("FIFA World Cup")].copy()
+    wc["confidence"] = pd.to_numeric(wc["confidence"], errors="coerce")
+    wc = wc.dropna(subset=["confidence"])
+    if wc.empty:
+        return []
+    buckets: List[dict] = []
+    edges = np.arange(0.0, 1.0 + bucket_size, bucket_size)
+    prior_strength = 12.0
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        if hi >= 1.0:
+            part = wc[(wc["confidence"] >= lo) & (wc["confidence"] <= hi)]
+        else:
+            part = wc[(wc["confidence"] >= lo) & (wc["confidence"] < hi)]
+        if part.empty:
+            continue
+        correct = part["correct"].map(parse_bool).astype(float)
+        avg_conf = float(part["confidence"].mean())
+        accuracy = float(correct.mean())
+        smoothed = float((correct.sum() + prior_strength * avg_conf) / (len(part) + prior_strength))
+        buckets.append({
+            "lo": float(lo),
+            "hi": float(hi),
+            "n": int(len(part)),
+            "avg_confidence": avg_conf,
+            "accuracy": accuracy,
+            "smoothed_accuracy": smoothed,
+        })
+    return buckets
+
+
+def apply_wc_knockout_calibration(
+    p_home: float,
+    p_away: float,
+    buckets: Sequence[dict],
+    *,
+    min_bucket_n: int = 5,
+) -> Tuple[float, float, str]:
+    """Calibrate a two-way knockout favorite probability using WC buckets."""
+    total = float(p_home) + float(p_away)
+    if total <= 0 or not np.isfinite(total):
+        return 0.5, 0.5, "WC calibration skipped: invalid knockout probabilities."
+    p_home = float(p_home) / total
+    p_away = float(p_away) / total
+    home_favored = p_home >= p_away
+    favorite_prob = p_home if home_favored else p_away
+    bucket = None
+    for candidate in buckets or []:
+        lo, hi = float(candidate.get("lo", 0.0)), float(candidate.get("hi", 1.0))
+        if lo <= favorite_prob < hi or (hi >= 1.0 and favorite_prob <= hi):
+            bucket = candidate
+            break
+    if not bucket or int(bucket.get("n", 0)) < min_bucket_n:
+        return p_home, p_away, "WC calibration skipped: no sufficiently populated bucket."
+    calibrated_favorite = float(bucket.get("smoothed_accuracy", favorite_prob))
+    calibrated_favorite = float(np.clip(calibrated_favorite, 0.50, 0.98))
+    calibrated_underdog = 1.0 - calibrated_favorite
+    note = (
+        f"WC bucket {bucket['lo']:.0%}-{bucket['hi']:.0%}: n={bucket['n']}, "
+        f"avg_conf={bucket['avg_confidence']:.1%}, acc={bucket['accuracy']:.1%}, "
+        f"smoothed={calibrated_favorite:.1%}"
+    )
+    if home_favored:
+        return calibrated_favorite, calibrated_underdog, note
+    return calibrated_underdog, calibrated_favorite, note
 
 
 def stage_counts_for_year(year: int, total_matches: int) -> Tuple[int, int, int, int]:

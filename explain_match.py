@@ -161,6 +161,10 @@ class ModelBundle:
     train_y: pd.Series | np.ndarray | None = None
     train_probabilities: np.ndarray | None = None
     squad_values: dict[tuple[str, int], dict[str, float]] | None = None
+    odds: dict | None = None
+    poisson_model: Any | None = None
+    alpha: float = 1.0
+    wc_calibration_buckets: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -296,7 +300,7 @@ def country_feature_map_for_year(
 ) -> dict[str, dict[str, float]]:
     if shared is None or not hasattr(shared, "country_features_for_year") or history is None:
         return {}
-    feature_year = min(int(year), 2022)
+    feature_year = int(year)
     try:
         features = shared.country_features_for_year(history, feature_year)
     except Exception as exc:
@@ -321,6 +325,9 @@ def build_match_features_from_state(
     active_state = state if state is not None else bundle.state
     if active_state is None:
         raise RuntimeError("Prediction state is required for match explanations.")
+    odds_row = None
+    if bundle.odds is not None and hasattr(ctx.shared, "odds_features_for_match"):
+        odds_row = ctx.shared.odds_features_for_match(bundle.odds, match_date, ctx.home, ctx.away)
     features = ctx.shared.compute_match_features(
         ctx.home,
         ctx.away,
@@ -330,7 +337,7 @@ def build_match_features_from_state(
         match_date,
         neutral,
         is_home,
-        odds_row=None,
+        odds_row=odds_row,
         squad_values=bundle.squad_values,
     )
     frame = coerce_feature_frame(features)
@@ -401,6 +408,10 @@ def bundle_from_training_parts(
     train_y: Any | None = None,
     country_features: dict[str, dict[str, float]] | None = None,
     squad_values: dict[tuple[str, int], dict[str, float]] | None = None,
+    odds: dict | None = None,
+    poisson_model: Any | None = None,
+    alpha: float = 1.0,
+    wc_buckets: list[dict[str, Any]] | None = None,
 ) -> ModelBundle:
     class_labels = list(getattr(model, "classes_", OUTCOME_LABELS))
     if len(class_labels) == 0:
@@ -414,6 +425,10 @@ def bundle_from_training_parts(
         train_y=train_y,
         country_features=country_features,
         squad_values=squad_values,
+        odds=odds,
+        poisson_model=poisson_model,
+        alpha=alpha,
+        wc_calibration_buckets=list(wc_buckets or []),
     )
 
 
@@ -454,6 +469,10 @@ def load_model_from_predict_module(module: Any | None, notes: RuntimeNotes) -> M
                     train_y=getattr(result, "train_y", None),
                     country_features=getattr(result, "country_features", None),
                     squad_values=getattr(result, "squad_values", None),
+                    odds=getattr(result, "odds", None),
+                    poisson_model=getattr(result, "poisson_model", None),
+                    alpha=getattr(result, "alpha", 1.0),
+                    wc_buckets=_shared.wc_calibration_buckets() if hasattr(_shared, "wc_calibration_buckets") else [],
                 )
         except Exception as exc:
             notes.warn(f"Could not train via `predict_2026.train_model_bundle()`: {exc}")
@@ -474,6 +493,10 @@ def load_model_from_predict_module(module: Any | None, notes: RuntimeNotes) -> M
                     train_X=train_X,
                     train_y=train_y,
                     squad_values=getattr(module, "_SQUAD_VALUES", None),
+                    odds=getattr(module, "_ODDS", None),
+                    poisson_model=getattr(module, "_POISSON", None),
+                    alpha=getattr(module, "_ALPHA", 1.0),
+                    wc_buckets=_shared.wc_calibration_buckets() if hasattr(_shared, "wc_calibration_buckets") else [],
                 )
             if has_predict_proba(result):
                 notes.warn("`predict_2026.train_model()` returned a bare model without state/schema; ignoring it.")
@@ -562,7 +585,17 @@ def prepare_X(frame: pd.DataFrame, feature_names: Sequence[str] | None = None) -
             suffix = " ..." if len(missing) > 25 else ""
             raise RuntimeError(f"Feature schema mismatch. Missing trained features: {preview}{suffix}")
         frame = frame[list(feature_names)]
-    return frame.fillna(0.0)
+    keep_nan = set()
+    try:
+        import shared as _shared
+        keep_nan |= set(getattr(_shared, "ODDS_FEATURE_COLUMNS", []))
+        keep_nan |= set(getattr(_shared, "SQUAD_VALUE_FEATURE_COLUMNS", []))
+    except Exception:
+        pass
+    non_nan = [col for col in frame.columns if col not in keep_nan]
+    if non_nan:
+        frame[non_nan] = frame[non_nan].fillna(0.0)
+    return frame
 
 
 def renormalize_knockout(probs: np.ndarray) -> np.ndarray:
@@ -621,7 +654,15 @@ def class_index(labels: Sequence[Any], kind: str, fallback: int) -> int:
     return min(fallback, max(len(labels) - 1, 0))
 
 
-def predict_probabilities(bundle: ModelBundle, X: pd.DataFrame) -> np.ndarray:
+def predict_probabilities(
+    bundle: ModelBundle,
+    X: pd.DataFrame,
+    home: str | None = None,
+    away: str | None = None,
+    *,
+    neutral: bool = True,
+    stage: int = 0,
+) -> np.ndarray:
     probs = np.asarray(bundle.model.predict_proba(X))[0]
     if probs.ndim != 1:
         probs = probs.reshape(-1)
@@ -633,7 +674,17 @@ def predict_probabilities(bundle: ModelBundle, X: pd.DataFrame) -> np.ndarray:
         h = class_index(bundle.class_labels, "home", 0)
         d = class_index(bundle.class_labels, "draw", 1)
         a = class_index(bundle.class_labels, "away", 2)
-        return np.array([probs[h], probs[d], probs[a]])
+        out = np.array([probs[h], probs[d], probs[a]])
+        if home is not None and away is not None and bundle.poisson_model is not None:
+            try:
+                import shared as _shared
+                alpha = getattr(_shared, "KNOCKOUT_ALPHA", 0.50) if stage > 0 else bundle.alpha
+                if alpha < 1.0:
+                    p_dc = bundle.poisson_model.outcome_probs(home, away, neutral=neutral)
+                    out = _shared.blend_probabilities(out, p_dc, alpha)
+            except Exception:
+                pass
+        return out
     padded = np.full(3, np.nan)
     padded[: min(3, len(probs))] = probs[:3]
     return padded
@@ -1111,7 +1162,9 @@ def counterfactuals(
                 is_home=is_home,
             )
             X_cf = prepare_X(frame, bundle.feature_names)
-            cf_probs = predict_probabilities(bundle, X_cf)
+            cf_probs = predict_probabilities(
+                bundle, X_cf, ctx.home, ctx.away, neutral=neutral, stage=ctx.stage,
+            )
             if ctx.stage > 0:
                 cf_probs = renormalize_knockout(cf_probs)
         except Exception as exc:
@@ -1202,6 +1255,10 @@ def format_probs(probs: np.ndarray) -> str:
 def report_lines(
     ctx: ExplanationContext,
     probs: np.ndarray,
+    raw_probs: np.ndarray,
+    conditional_probs: np.ndarray | None,
+    calibration_note: str,
+    odds_missing: bool,
     shap_rows: list[dict[str, Any]],
     factors: list[dict[str, Any]],
     waterfall_path: Path | None,
@@ -1229,9 +1286,16 @@ def report_lines(
     lines.append("")
     lines.append("## Prediction")
     lines.append("")
-    lines.append(f"- Model probabilities: **{format_probs(probs)}**")
+    lines.append(f"- Final reported probabilities: **{format_probs(probs)}**")
+    lines.append(f"- Raw blended 3-way probabilities: **{format_probs(raw_probs)}**")
     if ctx.stage > 0:
-        lines.append(f"- *Knockout stage: draw excluded, probabilities renormalized to P(home|no draw) and P(away|no draw)*")
+        if conditional_probs is not None:
+            lines.append(f"- Knockout no-draw probabilities before WC calibration: **{format_probs(conditional_probs)}**")
+        lines.append(f"- *Knockout stage: draw excluded for advancement-style reporting, then WC-specific calibration is applied to the favorite confidence.*")
+        if calibration_note:
+            lines.append(f"- WC calibration: {calibration_note}")
+    if odds_missing:
+        lines.append("- Warning: bookmaker odds are unavailable for this fixture, so the prediction is less market-informed.")
     lines.append(f"- Most likely outcome: **{OUTCOME_LABELS[int(np.nanargmax(probs))]}**")
     lines.append(f"- Confidence: **{fmt_pct(conf['confidence'])}**; top-two margin: **{fmt_pct(conf['margin'])}**; entropy: **{fmt_num(conf['entropy'])}**")
     if elo_probs is not None:
@@ -1427,15 +1491,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         country_features = bundle.country_features
     match_features = build_match_features_from_state(ctx, bundle, country_features, match_date)
     X = prepare_X(match_features, bundle.feature_names)
-    probs = predict_probabilities(bundle, X)
+    raw_probs = predict_probabilities(bundle, X, home, away, neutral=True, stage=ctx.stage)
+    probs = raw_probs.copy()
     is_knockout = ctx.stage > 0
+    conditional_probs = None
+    calibration_note = ""
     if is_knockout:
-        probs = renormalize_knockout(probs)
+        conditional_probs = renormalize_knockout(raw_probs)
+        probs = conditional_probs.copy()
+        if shared is not None and hasattr(shared, "apply_wc_knockout_calibration"):
+            probs[0], probs[2], calibration_note = shared.apply_wc_knockout_calibration(
+                probs[0], probs[2], bundle.wc_calibration_buckets,
+            )
+        probs[1] = 0.0
+    odds_missing = False
+    if shared is not None and hasattr(shared, "ODDS_FEATURE_COLUMNS"):
+        odds_cols = getattr(shared, "ODDS_FEATURE_COLUMNS", [])
+        odds_missing = any(
+            col in X.columns and not np.isfinite(float(X.iloc[0][col]))
+            for col in odds_cols
+        )
     shap_values, base_value, _explainer = compute_shap_contrast(bundle, X, notes)
     shap_rows = top_shap_rows(bundle.feature_names, shap_values, X, home, away)
     waterfall_path, force_path = save_shap_plots(ctx, X, shap_values, base_value)
     factors = factor_decomposition(shap_rows, X, home, away)
-    lines = report_lines(ctx, probs, shap_rows, factors, waterfall_path, force_path, bundle, X, country_features)
+    lines = report_lines(
+        ctx, probs, raw_probs, conditional_probs, calibration_note, odds_missing,
+        shap_rows, factors, waterfall_path, force_path, bundle, X, country_features,
+    )
     report = "\n".join(lines) + "\n"
     output_dir.mkdir(parents=True, exist_ok=True)
     report_path = output_dir / f"{slugify(home)}_vs_{slugify(away)}_report.md"
