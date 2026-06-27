@@ -24,11 +24,13 @@ from shared import (
     compute_match_features,
     harmonize_country,
     fit_xgb_with_validation,
-    update_elo,
-    expected_score,
+    apply_match_to_state,
+    infer_world_cup_stage_map,
+    make_team_state,
     parse_bool,
     finalize_world_cup_history,
     GROUP_2026_TEAMS,
+    WC2026_STAGE_TO_TRAIN,
 )
 from collections import defaultdict
 
@@ -38,12 +40,7 @@ WC_TEAM_SET = {harmonize_country(t) for teams in GROUP_2026_TEAMS.values() for t
 
 
 def make_initial_state():
-    return defaultdict(lambda: {
-        "elo": INITIAL_ELO, "form": [], "goals_for": [], "goals_against": [],
-        "last_match": None,
-        "h2h": defaultdict(lambda: {"matches": 0, "wins": 0, "draws": 0, "losses": 0, "gf": 0, "ga": 0}),
-        "wc_participations": 0, "wc_titles": 0, "wc_wins": 0, "wc_matches": 0,
-    })
+    return defaultdict(make_team_state)
 
 
 def train_model(results_df, country_history):
@@ -60,6 +57,9 @@ def train_model(results_df, country_history):
     country_feature_cache = {}
     active_wc_year = None
     active_wc_teams = set()
+    # Stage labels (0=group .. 4=final) for historical WC matches, so the model
+    # actually learns what ``stage`` means instead of always seeing a constant 0.
+    wc_stage_by_index = infer_world_cup_stage_map(df)
 
     for _, r in df.iterrows():
         ht = harmonize_country(r["home_team"])
@@ -67,70 +67,35 @@ def train_model(results_df, country_history):
         hs, aw = r["home_score"], r["away_score"]
         if pd.isna(hs) or pd.isna(aw):
             continue
+        hs, aw = int(hs), int(aw)
 
         feature_year = int(r["date"].year)
         if feature_year not in country_feature_cache:
             country_feature_cache[feature_year] = country_features_for_year(country_history, feature_year)
 
+        is_world_cup = r["tournament"] == "FIFA World Cup"
+        if active_wc_year is not None and (not is_world_cup or feature_year != active_wc_year):
+            finalize_world_cup_history(state, active_wc_year, active_wc_teams)
+            active_wc_year, active_wc_teams = None, set()
+
         neutral = parse_bool(r.get("neutral", True))
-        stage = 0  # historical matches: stage unknown, use 0
-        rows.append(compute_match_features(ht, at, state, country_feature_cache[feature_year], stage, r["date"]))
-
-        if hs > aw:
-            labels.append(0)
-        elif hs == aw:
-            labels.append(1)
-        else:
-            labels.append(2)
-
+        is_home = not neutral  # home side of a non-neutral fixture has home advantage
+        stage = wc_stage_by_index.get(int(r.name), 0) if is_world_cup else 0
+        rows.append(compute_match_features(
+            ht, at, state, country_feature_cache[feature_year], stage, r["date"],
+            neutral=neutral, is_home=is_home,
+        ))
+        labels.append(0 if hs > aw else (1 if hs == aw else 2))
         feature_dates.append(r["date"])
 
-        # Update state
-        ea = expected_score(state[ht]["elo"], state[at]["elo"])
-        state[ht]["elo"], state[at]["elo"] = update_elo(state[ht]["elo"], state[at]["elo"], int(hs), int(aw), neutral)
-
-        is_world_cup = "world cup" in str(r.get("tournament", "")).lower() and "qualif" not in str(r.get("tournament", "")).lower()
         if is_world_cup:
             if active_wc_year is None:
                 active_wc_year = feature_year
             active_wc_teams.update([ht, at])
 
-        # Update form, H2H, goals
-        for team, opp, gf, ga, is_home in [(ht, at, hs, aw, True), (at, ht, aw, hs, False)]:
-            result = 0.5 if hs == aw else (1.0 if (gf > ga) == is_home else 0.0)
-            state[team]["form"].append(result)
-            state[team]["form"] = state[team]["form"][-10:]
-            state[team]["goals_for"].append(gf)
-            state[team]["goals_for"] = state[team]["goals_for"][-10:]
-            state[team]["goals_against"].append(ga)
-            state[team]["goals_against"] = state[team]["goals_against"][-10:]
-            state[team]["last_match"] = r["date"]
-
-        # H2H
-        h2h_key = (ht, at)
-        state[ht]["h2h"][h2h_key]["matches"] += 1
-        state[at]["h2h"][(at, ht)]["matches"] += 1
-        if hs > aw:
-            state[ht]["h2h"][h2h_key]["wins"] += 1
-            state[at]["h2h"][(at, ht)]["losses"] += 1
-        elif hs == aw:
-            state[ht]["h2h"][h2h_key]["draws"] += 1
-            state[at]["h2h"][(at, ht)]["draws"] += 1
-        else:
-            state[ht]["h2h"][h2h_key]["losses"] += 1
-            state[at]["h2h"][(at, ht)]["wins"] += 1
-        state[ht]["h2h"][h2h_key]["gf"] += hs
-        state[ht]["h2h"][h2h_key]["ga"] += aw
-        state[at]["h2h"][(at, ht)]["gf"] += aw
-        state[at]["h2h"][(at, ht)]["ga"] += hs
-
-        if is_world_cup:
-            for t in [ht, at]:
-                state[t]["wc_matches"] += 1
-            if hs > aw:
-                state[ht]["wc_wins"] += 1
-            elif hs < aw:
-                state[at]["wc_wins"] += 1
+        # Single shared state update (Elo, form, goals, H2H, momentum, fatigue).
+        apply_match_to_state(state, ht, at, hs, aw, r["date"],
+                             neutral=neutral, is_world_cup=is_world_cup)
 
     if active_wc_year is not None:
         finalize_world_cup_history(state, active_wc_year, active_wc_teams)
@@ -143,7 +108,7 @@ def train_model(results_df, country_history):
         n_estimators=300, max_depth=6, learning_rate=0.05,
         subsample=0.8, colsample_bytree=0.8,
     )
-    model, _ = fit_xgb_with_validation(model, X, y, label="XGBoost")
+    model, _ = fit_xgb_with_validation(model, X, y, label="XGBoost", dates=feature_dates)
     return model, state, X.columns.tolist()
 
 
@@ -162,13 +127,13 @@ def prepare_2026_state(state, results_df):
     return state
 
 
-def predict_match(model, feature_names, home, away, state, cf, stage, date):
+def predict_match(model, feature_names, home, away, state, cf, stage, date, neutral=True, is_home=False):
     """Predict a single match. Returns (predicted_label_idx, probs[3])."""
-    feat = compute_match_features(home, away, state, cf, stage, date)
+    feat = compute_match_features(home, away, state, cf, stage, date, neutral=neutral, is_home=is_home)
     X = pd.DataFrame([feat])[feature_names].fillna(0)
     probs = model.predict_proba(X)[0]
 
-    # Knockout: renormalize
+    # Knockout: renormalize away the draw probability.
     if stage > 0:
         total = probs[0] + probs[2]
         if total > 0:
@@ -189,23 +154,28 @@ def actual_result(home_score, away_score):
 
 
 def stage_from_tournament_round(tournament_str, home_team, away_team):
-    """Infer stage code from tournament field or context."""
+    """Infer the *trained* stage code (0..4) from a tournament/round string.
+
+    The historical training data only contains stages 0..4 (group .. final), so
+    the 2026 bracket's richer R32/R16/QF/SF/Final scheme is collapsed onto that
+    range via ``WC2026_STAGE_TO_TRAIN``. Returning 5 or 6 (as before) asked the
+    model to predict on a ``stage`` value it had never seen during training.
+    """
     t = str(tournament_str).lower()
     if "group" in t:
-        return 0
+        return WC2026_STAGE_TO_TRAIN["group"]
     if "round of 32" in t or "r32" in t:
-        return 1
+        return WC2026_STAGE_TO_TRAIN["round_of_32"]
     if "round of 16" in t or "r16" in t:
-        return 2
+        return WC2026_STAGE_TO_TRAIN["round_of_16"]
     if "quarter" in t or "qf" in t:
-        return 3
+        return WC2026_STAGE_TO_TRAIN["quarterfinal"]
     if "semi" in t or "sf" in t:
-        return 4
+        return WC2026_STAGE_TO_TRAIN["semifinal"]
     if "third" in t or "3rd" in t:
-        return 5
+        return WC2026_STAGE_TO_TRAIN["third_place"]
     if "final" in t and "semi" not in t:
-        return 6
-    # Default: if both teams in WC set, assume group stage
+        return WC2026_STAGE_TO_TRAIN["final"]
     return 0
 
 
@@ -257,9 +227,13 @@ def run_backtest():
         date = r["date"]
         stage = stage_from_tournament_round(r.get("tournament", ""), home, away)
         neutral = parse_bool(r.get("neutral", True))
+        is_home = not neutral
 
         # Predict BEFORE updating state with this match's result
-        predicted_idx, probs = predict_match(model, feature_names, home, away, state, cf, stage, date)
+        predicted_idx, probs = predict_match(
+            model, feature_names, home, away, state, cf, stage, date,
+            neutral=neutral, is_home=is_home,
+        )
         actual_idx = actual_result(hs, aw)
 
         is_correct = predicted_idx == actual_idx
@@ -292,48 +266,10 @@ def run_backtest():
             "p_away": float(probs[2]),
         })
 
-        # Update state with actual result
-        ea = expected_score(state[home]["elo"], state[away]["elo"])
-        state[home]["elo"], state[away]["elo"] = update_elo(
-            state[home]["elo"], state[away]["elo"], hs, aw, neutral
-        )
-
-        # Update form, H2H, goals
-        for team, opp, gf, ga, is_home in [(home, away, hs, aw, True), (away, home, aw, hs, False)]:
-            result = 0.5 if hs == aw else (1.0 if (gf > ga) == is_home else 0.0)
-            state[team]["form"].append(result)
-            state[team]["form"] = state[team]["form"][-10:]
-            state[team]["goals_for"].append(gf)
-            state[team]["goals_for"] = state[team]["goals_for"][-10:]
-            state[team]["goals_against"].append(ga)
-            state[team]["goals_against"] = state[team]["goals_against"][-10:]
-            state[team]["last_match"] = date
-
-        # H2H
-        h2h_key = (home, away)
-        state[home]["h2h"][h2h_key]["matches"] += 1
-        state[away]["h2h"][(away, home)]["matches"] += 1
-        if hs > aw:
-            state[home]["h2h"][h2h_key]["wins"] += 1
-            state[away]["h2h"][(away, home)]["losses"] += 1
-        elif hs == aw:
-            state[home]["h2h"][h2h_key]["draws"] += 1
-            state[away]["h2h"][(away, home)]["draws"] += 1
-        else:
-            state[home]["h2h"][h2h_key]["losses"] += 1
-            state[away]["h2h"][(away, home)]["wins"] += 1
-        state[home]["h2h"][h2h_key]["gf"] += hs
-        state[home]["h2h"][h2h_key]["ga"] += aw
-        state[away]["h2h"][(away, home)]["gf"] += aw
-        state[away]["h2h"][(away, home)]["ga"] += hs
-
-        # WC stats
-        state[home]["wc_matches"] += 1
-        state[away]["wc_matches"] += 1
-        if hs > aw:
-            state[home]["wc_wins"] += 1
-        elif hs < aw:
-            state[away]["wc_wins"] += 1
+        # Update state with the actual result (Elo, form, goals, H2H, momentum,
+        # fatigue) through the single shared updater. 2026 WC matches count as WC.
+        apply_match_to_state(state, home, away, hs, aw, date,
+                             neutral=neutral, is_world_cup=True)
 
     # ─── Metrics ────────────────────────────────────────────────────────────
     probs_arr = np.array(probs_list)

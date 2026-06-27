@@ -129,6 +129,24 @@ INITIAL_ELO = 1500
 K_FACTOR = 32
 STAGE_TO_INT = {"group": 0, "round_of_16": 1, "quarterfinal": 2, "semifinal": 3, "final": 4}
 
+# Rolling window length for form / goals (kept identical across every script so the
+# features the model is trained on match the features used at prediction time).
+FORM_WINDOW = 20
+
+# Knockout stage codes used by the 2026 prediction/backtest pipeline. Historical
+# training only ever sees stages 0..4 (see ``STAGE_TO_INT``), so the 2026 pipeline
+# must collapse its richer R32/R16/QF/SF/Final scheme onto the same 0..4 range to
+# avoid asking the model to extrapolate to a ``stage`` value it never observed.
+WC2026_STAGE_TO_TRAIN = {
+    "group": 0,
+    "round_of_32": 1,
+    "round_of_16": 1,
+    "quarterfinal": 2,
+    "semifinal": 3,
+    "third_place": 3,
+    "final": 4,
+}
+
 
 def _third_place_assignment_for_combo(groups: Sequence[str]) -> Dict[str, int]:
     """Assign third-place groups to FIFA R32 slots for one qualifying combination."""
@@ -206,12 +224,102 @@ def make_team_state() -> Dict[str, object]:
         "goals_for": [],
         "goals_against": [],
         "last_match": None,
+        # New rolling history needed for momentum / opponent-weighted / fatigue features.
+        "elo_history": [],          # Elo value AFTER each match (chronological)
+        "opp_elo": [],              # opponent Elo BEFORE each match (chronological)
+        "match_dates": [],          # date of each rolling match (chronological)
         "h2h": defaultdict(lambda: {"matches": 0, "wins": 0, "draws": 0, "losses": 0, "gf": 0, "ga": 0}),
         "wc_participations": 0,
         "wc_titles": 0,
         "wc_wins": 0,
         "wc_matches": 0,
     }
+
+
+def _trim(seq: list, n: int = FORM_WINDOW) -> list:
+    """Return the last ``n`` items of ``seq`` (helper to keep windows consistent)."""
+    return seq[-n:]
+
+
+def update_team_state(
+    state,
+    team: str,
+    opponent: str,
+    gf: int,
+    ga: int,
+    match_date,
+    *,
+    neutral: bool = True,
+    is_world_cup: bool = False,
+) -> None:
+    """Apply one match result to ONE team's rolling state.
+
+    Centralizing this here guarantees that every script (predict_2026, backtest,
+    monte_carlo) updates Elo, form, goals, H2H and the new rolling histories in
+    exactly the same way, which previously diverged (different form windows and a
+    broken H2H key in the backtest). Call once per team, per match.
+    """
+    s, o = state[team], state[opponent]
+    opp_elo_before = o["elo"]
+
+    # Form / goals rolling windows.
+    result = 1 if gf > ga else (0.5 if gf == ga else 0)
+    s["form"] = _trim(s["form"] + [result])
+    s["goals_for"] = _trim(s["goals_for"] + [gf])
+    s["goals_against"] = _trim(s["goals_against"] + [ga])
+    s["opp_elo"] = _trim(s["opp_elo"] + [opp_elo_before])
+    s["match_dates"] = _trim(s["match_dates"] + [match_date])
+    s["last_match"] = match_date
+
+    # H2H (always keyed by the sorted pair so lookups are symmetric).
+    key = tuple(sorted([team, opponent]))
+    rec = s["h2h"][key]
+    rec["matches"] += 1
+    if gf > ga:
+        rec["wins"] += 1
+    elif gf == ga:
+        rec["draws"] += 1
+    else:
+        rec["losses"] += 1
+    rec["gf"] += gf
+    rec["ga"] += ga
+
+    if is_world_cup:
+        s["wc_matches"] += 1
+        if gf > ga:
+            s["wc_wins"] += 1
+
+
+def apply_match_to_state(
+    state,
+    home: str,
+    away: str,
+    home_score: int,
+    away_score: int,
+    match_date,
+    *,
+    neutral: bool = True,
+    is_world_cup: bool = False,
+) -> None:
+    """Apply a full match (both sides + Elo) to the shared rolling state.
+
+    Elo must be updated AFTER both teams' opponent-Elo snapshots are recorded, so
+    that ``opp_elo`` reflects the pre-match strength of the opponent.
+    """
+    home = harmonize_country(home)
+    away = harmonize_country(away)
+    pre_home, pre_away = state[home]["elo"], state[away]["elo"]
+
+    update_team_state(state, home, away, home_score, away_score, match_date,
+                      neutral=neutral, is_world_cup=is_world_cup)
+    update_team_state(state, away, home, away_score, home_score, match_date,
+                      neutral=neutral, is_world_cup=is_world_cup)
+
+    new_home, new_away = update_elo(pre_home, pre_away, home_score, away_score, neutral)
+    state[home]["elo"] = new_home
+    state[away]["elo"] = new_away
+    state[home]["elo_history"] = _trim(state[home]["elo_history"] + [new_home])
+    state[away]["elo_history"] = _trim(state[away]["elo_history"] + [new_away])
 
 
 def finalize_world_cup_history(state, wc_year: int, participants: Iterable[str]) -> None:
@@ -225,23 +333,111 @@ def finalize_world_cup_history(state, wc_year: int, participants: Iterable[str])
         state[winner]["wc_titles"] += 1
 
 
+def _elo_momentum(state_entry, lookback: int) -> float:
+    """Elo gained/lost over the last ``lookback`` matches (0 if not enough history)."""
+    hist = state_entry.get("elo_history", [])
+    if len(hist) < 2:
+        return 0.0
+    window = hist[-(lookback + 1):]
+    return float(window[-1] - window[0])
+
+
+def _opp_weighted_form(state_entry) -> float:
+    """Recent win/draw points weighted by the strength of the opponent faced.
+
+    A win against a 2000-Elo side counts far more than a win against a 1300-Elo
+    side. Returns a strength-weighted average of recent results in [0, 1]-ish range.
+    """
+    form = state_entry.get("form", [])
+    opp = state_entry.get("opp_elo", [])
+    n = min(len(form), len(opp))
+    if n == 0:
+        return 0.5
+    form, opp = form[-n:], opp[-n:]
+    # Weight = opponent strength relative to 1500 baseline (clipped to stay positive).
+    weights = [max(0.25, e / 1500.0) for e in opp]
+    total_w = sum(weights)
+    if total_w == 0:
+        return float(np.mean(form))
+    return float(sum(f * w for f, w in zip(form, weights)) / total_w)
+
+
+def _matches_in_window(state_entry, match_date, days: int) -> int:
+    """Number of matches played in the ``days`` leading up to ``match_date`` (fatigue)."""
+    dates = state_entry.get("match_dates", [])
+    if not dates or match_date is None:
+        return 0
+    count = 0
+    for d in dates:
+        if d is None:
+            continue
+        try:
+            delta = (match_date - d).days
+        except TypeError:
+            continue
+        if 0 <= delta <= days:
+            count += 1
+    return count
+
+
 def compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False):
     s, o = state[team], state[opponent]
     form = s["form"][-10:] if s["form"] else [0.5]
+    opp_form = o["form"][-10:] if o["form"] else [0.5]
     gf5 = s["goals_for"][-5:] or [0]
     ga5 = s["goals_against"][-5:] or [0]
     gf10 = s["goals_for"][-10:] or [0]
     ga10 = s["goals_against"][-10:] or [0]
+    gf3 = s["goals_for"][-3:] or [0]
+    ga3 = s["goals_against"][-3:] or [0]
     rest = min((match_date - s["last_match"]).days if s["last_match"] else 30, 60)
     h2h_key = tuple(sorted([team, opponent]))
     h = s["h2h"].get(h2h_key, {"matches": 0, "wins": 0, "draws": 0, "losses": 0, "gf": 0, "ga": 0})
     hm = max(h["matches"], 1)
     cf, oc = country_features.get(team, {}), country_features.get(opponent, {})
+
+    # ── Existing derived quantities ──
+    form_win_rate = sum(1 for f in form if f == 1) / len(form)
+    form_draw_rate = sum(1 for f in form if f == 0.5) / len(form)
+    opp_form_draw_rate = sum(1 for f in opp_form if f == 0.5) / len(opp_form)
+    elo_diff = s["elo"] - o["elo"]
+
+    # ── NEW FEATURES ──
+    # 1. Elo momentum: is the team trending up or down recently?
+    elo_momentum_5 = _elo_momentum(s, 5)
+    elo_momentum_10 = _elo_momentum(s, 10)
+    opp_elo_momentum_5 = _elo_momentum(o, 5)
+    elo_momentum_diff = elo_momentum_5 - opp_elo_momentum_5
+
+    # 2. Attacking / defensive trend: recent 3 vs baseline 10.
+    attack_trend = float(np.mean(gf3) - np.mean(gf10))
+    defense_trend = float(np.mean(ga3) - np.mean(ga10))  # positive = conceding more lately
+
+    # 3. Opponent-strength-weighted form (quality of recent results).
+    weighted_form = _opp_weighted_form(s)
+    opp_weighted_form = _opp_weighted_form(o)
+    weighted_form_diff = weighted_form - opp_weighted_form
+
+    # 4. Fatigue / congestion: matches in the last 30 and 90 days.
+    fatigue_30 = _matches_in_window(s, match_date, 30)
+    fatigue_90 = _matches_in_window(s, match_date, 90)
+    opp_fatigue_30 = _matches_in_window(o, match_date, 30)
+    fatigue_diff_30 = fatigue_30 - opp_fatigue_30
+
+    # 5. Draw-propensity signals (the model's documented weakness is missing draws).
+    #    Closely-matched, low-scoring, draw-prone sides are the classic draw setup.
+    elo_parity = 1.0 / (1.0 + abs(elo_diff) / 100.0)  # ~1 when evenly matched, ->0 apart
+    combined_draw_rate = (form_draw_rate + opp_form_draw_rate) / 2.0
+    expected_total_goals = float(np.mean(gf5) + np.mean(ga5)
+                                 + np.mean(o["goals_for"][-5:] or [0])
+                                 + np.mean(o["goals_against"][-5:] or [0])) / 2.0
+    low_scoring_indicator = 1.0 / (1.0 + expected_total_goals)
+
     return {
         "elo": s["elo"], "elo_opponent": o["elo"],
-        "elo_diff": s["elo"] - o["elo"], "elo_sum": s["elo"] + o["elo"],
-        "form_win_rate": sum(1 for f in form if f == 1) / len(form),
-        "form_draw_rate": sum(1 for f in form if f == 0.5) / len(form),
+        "elo_diff": elo_diff, "elo_sum": s["elo"] + o["elo"],
+        "form_win_rate": form_win_rate,
+        "form_draw_rate": form_draw_rate,
         "form_loss_rate": sum(1 for f in form if f == 0) / len(form),
         "avg_goals_scored_5": np.mean(gf5), "avg_goals_conceded_5": np.mean(ga5),
         "avg_goals_scored_10": np.mean(gf10), "avg_goals_conceded_10": np.mean(ga10),
@@ -267,6 +463,21 @@ def compute_match_features(team, opponent, state, country_features, stage_num, m
         "elo_diff_pre": cf.get("elo_rating", s["elo"]) - oc.get("elo_rating", o["elo"]),
         "power_diff": cf.get("football_power_index", 0) - oc.get("football_power_index", 0),
         "tradition_diff": cf.get("football_tradition", 0) - oc.get("football_tradition", 0),
+        # ── NEW engineered features ──
+        "elo_momentum_5": elo_momentum_5,
+        "elo_momentum_10": elo_momentum_10,
+        "elo_momentum_diff": elo_momentum_diff,
+        "attack_trend": attack_trend,
+        "defense_trend": defense_trend,
+        "weighted_form": weighted_form,
+        "weighted_form_diff": weighted_form_diff,
+        "fatigue_30": fatigue_30,
+        "fatigue_90": fatigue_90,
+        "fatigue_diff_30": fatigue_diff_30,
+        "elo_parity": elo_parity,
+        "combined_draw_rate": combined_draw_rate,
+        "expected_total_goals": expected_total_goals,
+        "low_scoring_indicator": low_scoring_indicator,
     }
 
 

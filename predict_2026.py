@@ -12,7 +12,9 @@ from typing import Any
 import warnings
 from shared import (
     GROUP_2026_TEAMS,
+    WC2026_STAGE_TO_TRAIN,
     apply_group_result,
+    apply_match_to_state,
     build_2026_group_state,
     build_round_of_32,
     compute_match_features,
@@ -30,6 +32,9 @@ from shared import (
 )
 warnings.filterwarnings('ignore')
 
+# 2026 co-hosts get home advantage when they play in their own country.
+WC2026_HOSTS = {harmonize_country(t) for t in ("USA", "Canada", "Mexico")}
+
 def harmonize(name):
     return harmonize_country(name)
 
@@ -45,7 +50,7 @@ class PredictionBundle:
     country_features: dict
 
 
-def compute_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=True):
+def compute_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False):
     return compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral, is_home)
 
 def train_model_bundle(results_df, country_history, exclude_2026_wc=True):
@@ -81,40 +86,14 @@ def train_model_bundle(results_df, country_history, exclude_2026_wc=True):
         rows.append(compute_features(ht, at, state, country_feature_cache[feature_year], stage, r['date'], neutral, not neutral))
         labels.append(0 if hs > aw else (1 if hs == aw else 2))
         feature_dates.append(r['date'])
-        
-        state[ht]['elo'], state[at]['elo'] = update_elo(state[ht]['elo'], state[at]['elo'], hs, aw, neutral)
-        for t, gf, ga, result in [(ht, hs, aw, 'W' if hs>aw else ('D' if hs==aw else 'L')),
-                                   (at, aw, hs, 'W' if aw>hs else ('D' if hs==aw else 'L'))]:
-            state[t]['form'].append(1 if result=='W' else (0.5 if result=='D' else 0))
-            state[t]['form'] = state[t]['form'][-20:]
-            state[t]['goals_for'] = (state[t]['goals_for'] + [gf])[-20:]
-            state[t]['goals_against'] = (state[t]['goals_against'] + [ga])[-20:]
-            state[t]['last_match'] = r['date']
-        
-        h2h_key = tuple(sorted([ht, at]))
-        for t in [ht, at]:
-            state[t]['h2h'][h2h_key]['matches'] += 1
-        if hs > aw:
-            state[ht]['h2h'][h2h_key]['wins'] += 1
-            state[at]['h2h'][h2h_key]['losses'] += 1
-        elif hs == aw:
-            state[ht]['h2h'][h2h_key]['draws'] += 1
-            state[at]['h2h'][h2h_key]['draws'] += 1
-        else:
-            state[ht]['h2h'][h2h_key]['losses'] += 1
-            state[at]['h2h'][h2h_key]['wins'] += 1
-        state[ht]['h2h'][h2h_key]['gf'] += hs
-        state[ht]['h2h'][h2h_key]['ga'] += aw
-        state[at]['h2h'][h2h_key]['gf'] += aw
-        state[at]['h2h'][h2h_key]['ga'] += hs
-        
+
         if is_world_cup:
             if active_wc_year is None:
                 active_wc_year = feature_year
             active_wc_teams.update([ht, at])
-            for t in [ht, at]: state[t]['wc_matches'] += 1
-            if hs > aw: state[ht]['wc_wins'] += 1
-            elif hs < aw: state[at]['wc_wins'] += 1
+
+        apply_match_to_state(state, ht, at, hs, aw, r['date'],
+                             neutral=neutral, is_world_cup=is_world_cup)
 
     if active_wc_year is not None:
         finalize_world_cup_history(state, active_wc_year, active_wc_teams)
@@ -147,7 +126,8 @@ def prepare_2026_state(results, state):
     wc26['date'] = pd.to_datetime(wc26['date'])
     completed = wc26[wc26['home_score'].notna() & wc26['away_score'].notna()].sort_values('date')
     for _, r in completed.iterrows():
-        update_state(state, r['home_team'], r['away_team'], int(r['home_score']), int(r['away_score']), r['date'])
+        neutral = parse_bool(r.get('neutral', True))
+        update_state(state, r['home_team'], r['away_team'], int(r['home_score']), int(r['away_score']), r['date'], neutral=neutral)
     for teams in GROUP_2026_TEAMS.values():
         for team in teams:
             state[harmonize(team)]['wc_participations'] += 1
@@ -156,38 +136,13 @@ def prepare_2026_state(results, state):
 def load_country_features():
     return country_features_for_year(load_country_feature_history(), 2022)
 
-def update_state(state, ta, tb, sa, sb, date):
-    ha, hb = harmonize(ta), harmonize(tb)
-    state[ha]['elo'], state[hb]['elo'] = update_elo(state[ha]['elo'], state[hb]['elo'], sa, sb, True)
-    for t, gf, ga in [(ha, sa, sb), (hb, sb, sa)]:
-        state[t]['form'].append(1 if gf > ga else (0.5 if gf == ga else 0))
-        state[t]['form'] = state[t]['form'][-20:]
-        state[t]['goals_for'] = (state[t]['goals_for'] + [gf])[-20:]
-        state[t]['goals_against'] = (state[t]['goals_against'] + [ga])[-20:]
-        state[t]['last_match'] = date
-    h2h_key = tuple(sorted([ha, hb]))
-    for t in [ha, hb]: state[t]['h2h'][h2h_key]['matches'] += 1
-    if sa > sb:
-        state[ha]['h2h'][h2h_key]['wins'] += 1
-        state[hb]['h2h'][h2h_key]['losses'] += 1
-    elif sa == sb:
-        state[ha]['h2h'][h2h_key]['draws'] += 1
-        state[hb]['h2h'][h2h_key]['draws'] += 1
-    else:
-        state[ha]['h2h'][h2h_key]['losses'] += 1
-        state[hb]['h2h'][h2h_key]['wins'] += 1
-    state[ha]['h2h'][h2h_key]['gf'] += sa
-    state[ha]['h2h'][h2h_key]['ga'] += sb
-    state[hb]['h2h'][h2h_key]['gf'] += sb
-    state[hb]['h2h'][h2h_key]['ga'] += sa
-    state[ha]['wc_matches'] += 1
-    state[hb]['wc_matches'] += 1
-    if sa > sb: state[ha]['wc_wins'] += 1
-    elif sa < sb: state[hb]['wc_wins'] += 1
+def update_state(state, ta, tb, sa, sb, date, neutral=True):
+    # All 2026 fixtures handled here are World Cup matches.
+    apply_match_to_state(state, ta, tb, sa, sb, date, neutral=neutral, is_world_cup=True)
 
-def predict(model, fl, ta, tb, state, cf, stage, date):
+def predict(model, fl, ta, tb, state, cf, stage, date, neutral=True, is_home=False):
     ha, hb = harmonize(ta), harmonize(tb)
-    feat = compute_features(ha, hb, state, cf, stage, date, True, False)
+    feat = compute_features(ha, hb, state, cf, stage, date, neutral, is_home)
     X = pd.DataFrame([feat])[fl].fillna(0)
     probs = model.predict_proba(X)[0]
     pa, pd_, pb = probs[0], probs[1], probs[2]
@@ -262,15 +217,20 @@ def main():
     print("=" * 70)
     
     for date, home, away, group in remaining:
-        winner, prob, pa, pd_, pb = predict(model, fl, home, away, state, cf, 0, date)
         ha, at = harmonize(home), harmonize(away)
+        # The 2026 hosts (USA, Canada, Mexico) get genuine home advantage at home.
+        home_is_host = ha in WC2026_HOSTS
+        winner, prob, pa, pd_, pb = predict(
+            model, fl, home, away, state, cf, 0, date,
+            neutral=not home_is_host, is_home=home_is_host,
+        )
         if winner == home:
             sa, sb = 2, 1
         elif winner == away:
             sa, sb = 1, 2
         else:
             sa, sb = 1, 1
-        update_state(state, ha, at, sa, sb, date)
+        update_state(state, ha, at, sa, sb, date, neutral=not home_is_host)
         apply_group_result(groups, group, ha, at, sa, sb)
         arrow = "←" if prob > 0.55 else "~"
         result_label = "draw" if winner is None else winner
@@ -307,7 +267,7 @@ def main():
     # === KNOCKOUT BRACKET ===
     r32 = build_round_of_32(gw, gr, best8)
     
-    r32_w = simulate_round(r32, "ROUND OF 32", 1, state, model, fl, cf, pd.Timestamp('2026-06-29'))
+    r32_w = simulate_round(r32, "ROUND OF 32", WC2026_STAGE_TO_TRAIN["round_of_32"], state, model, fl, cf, pd.Timestamp('2026-06-29'))
     
     # FIFA bracket R16 pairings (from Wikipedia — NON-SEQUENTIAL crossover!)
     # M89: W73 vs W75 | M90: W74 vs W77 | M91: W76 vs W78 | M92: W79 vs W80
@@ -324,7 +284,7 @@ def main():
         ('R16 M95', r32_w[13], r32_w[15]), # W86 vs W88  (Argentina vs Belgium)
         ('R16 M96', r32_w[12], r32_w[14]), # W85 vs W87  (Switzerland vs Portugal)
     ]
-    r16_w = simulate_round(r16, "ROUND OF 16", 2, state, model, fl, cf, pd.Timestamp('2026-07-04'))
+    r16_w = simulate_round(r16, "ROUND OF 16", WC2026_STAGE_TO_TRAIN["round_of_16"], state, model, fl, cf, pd.Timestamp('2026-07-04'))
     
     # QF: M97: W89 vs W90 | M98: W93 vs W94 | M99: W91 vs W92 | M100: W95 vs W96
     # Bracket: (89/90 side) vs (93/94 side) → SF101, (91/92 side) vs (95/96 side) → SF102
@@ -334,7 +294,7 @@ def main():
         ('QF M99', r16_w[2], r16_w[3]),  # W91 vs W92 (left-bot: Brazil path vs Mexico/England)
         ('QF M100', r16_w[6], r16_w[7]), # W95 vs W96 (right-bot: Argentina/Bel vs Swi/Port)
     ]
-    qf_w = simulate_round(qf, "QUARTERFINALS", 3, state, model, fl, cf, pd.Timestamp('2026-07-09'))
+    qf_w = simulate_round(qf, "QUARTERFINALS", WC2026_STAGE_TO_TRAIN["quarterfinal"], state, model, fl, cf, pd.Timestamp('2026-07-09'))
     
     # SF: M101: W97 vs W98 | M102: W99 vs W100
     # Germany side (QF97/98) vs Brazil side (QF99/100) → they can only meet in FINAL
@@ -342,21 +302,21 @@ def main():
         ('SF M101', qf_w[0], qf_w[1]),  # left side (Germany's half)
         ('SF M102', qf_w[2], qf_w[3]),  # right side (Brazil's half)
     ]
-    sf_w = simulate_round(sf, "SEMIFINALS", 4, state, model, fl, cf, pd.Timestamp('2026-07-14'))
+    sf_w = simulate_round(sf, "SEMIFINALS", WC2026_STAGE_TO_TRAIN["semifinal"], state, model, fl, cf, pd.Timestamp('2026-07-14'))
     
     # 3rd place: L101 vs L102
     sf_losers = [qf_w[i] for i in range(4) if qf_w[i] not in sf_w]
     print(f"\n{'=' * 70}")
     print("THIRD PLACE MATCH")
     print(f"{'=' * 70}")
-    third, tp, _, _, _ = predict(model, fl, sf_losers[0], sf_losers[1], state, cf, 4, pd.Timestamp('2026-07-18'))
+    third, tp, _, _, _ = predict(model, fl, sf_losers[0], sf_losers[1], state, cf, WC2026_STAGE_TO_TRAIN["third_place"], pd.Timestamp('2026-07-18'))
     print(f"  {sf_losers[0]} vs {sf_losers[1]} → {third} ({tp:.1%})")
     
     # FINAL
     print(f"\n{'=' * 70}")
     print("🏆 FINAL 🏆")
     print(f"{'=' * 70}")
-    champion, cp, pa, pd_, pb = predict(model, fl, sf_w[0], sf_w[1], state, cf, 5, pd.Timestamp('2026-07-19'))
+    champion, cp, pa, pd_, pb = predict(model, fl, sf_w[0], sf_w[1], state, cf, WC2026_STAGE_TO_TRAIN["final"], pd.Timestamp('2026-07-19'))
     runner_up = sf_w[1] if champion == sf_w[0] else sf_w[0]
     fourth = sf_losers[1] if third == sf_losers[0] else sf_losers[0]
     

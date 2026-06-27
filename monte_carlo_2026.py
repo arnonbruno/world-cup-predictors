@@ -11,7 +11,9 @@ from collections import defaultdict, Counter
 import copy, warnings, time
 from shared import (
     GROUP_2026_TEAMS,
+    WC2026_STAGE_TO_TRAIN,
     apply_group_result,
+    apply_match_to_state,
     build_2026_group_state,
     build_round_of_32,
     compute_match_features,
@@ -19,6 +21,9 @@ from shared import (
     fit_xgb_with_validation,
     finalize_world_cup_history,
     harmonize_country,
+    infer_world_cup_stage_map,
+    make_team_state,
+    parse_bool,
     load_country_feature_history,
     rank_third_place_teams,
     sorted_group_standings,
@@ -46,37 +51,11 @@ def update_elo(elo_a, elo_b, score_a, score_b, neutral=True):
     return (elo_a + K_FACTOR * multiplier * (sa - ea),
             elo_b + K_FACTOR * multiplier * ((1 - sa) - (1 - ea)))
 
-def compute_features(team, opponent, state, country_features, stage_num, match_date):
-    return compute_match_features(team, opponent, state, country_features, stage_num, match_date)
+def compute_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False):
+    return compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral, is_home)
 
-def update_state(state, ta, tb, sa, sb, date):
-    ha, hb = harmonize(ta), harmonize(tb)
-    state[ha]['elo'], state[hb]['elo'] = update_elo(state[ha]['elo'], state[hb]['elo'], sa, sb)
-    for t, gf, ga in [(ha, sa, sb), (hb, sb, sa)]:
-        state[t]['form'].append(1 if gf > ga else (0.5 if gf == ga else 0))
-        state[t]['form'] = state[t]['form'][-20:]
-        state[t]['goals_for'] = (state[t]['goals_for'] + [gf])[-20:]
-        state[t]['goals_against'] = (state[t]['goals_against'] + [ga])[-20:]
-        state[t]['last_match'] = date
-    h2h_key = tuple(sorted([ha, hb]))
-    for t in [ha, hb]: state[t]['h2h'][h2h_key]['matches'] += 1
-    if sa > sb:
-        state[ha]['h2h'][h2h_key]['wins'] += 1
-        state[hb]['h2h'][h2h_key]['losses'] += 1
-    elif sa == sb:
-        state[ha]['h2h'][h2h_key]['draws'] += 1
-        state[hb]['h2h'][h2h_key]['draws'] += 1
-    else:
-        state[ha]['h2h'][h2h_key]['losses'] += 1
-        state[hb]['h2h'][h2h_key]['wins'] += 1
-    state[ha]['h2h'][h2h_key]['gf'] += sa
-    state[ha]['h2h'][h2h_key]['ga'] += sb
-    state[hb]['h2h'][h2h_key]['gf'] += sb
-    state[hb]['h2h'][h2h_key]['ga'] += sa
-    state[ha]['wc_matches'] += 1
-    state[hb]['wc_matches'] += 1
-    if sa > sb: state[ha]['wc_wins'] += 1
-    elif sa < sb: state[hb]['wc_wins'] += 1
+def update_state(state, ta, tb, sa, sb, date, neutral=True):
+    apply_match_to_state(state, ta, tb, sa, sb, date, neutral=neutral, is_world_cup=True)
 
 def predict_probs(model, fl, ta, tb, state, cf, stage, date):
     ha, hb = harmonize(ta), harmonize(tb)
@@ -132,7 +111,7 @@ def run_one_sim(model, fl, base_state, cf, base_groups, remaining_matches):
     r32_date = pd.Timestamp('2026-06-29')
     r32_winners = []
     for _, ta, tb in r32_matches:
-        probs = predict_probs(model, fl, ta, tb, state, cf, 1, r32_date)
+        probs = predict_probs(model, fl, ta, tb, state, cf, WC2026_STAGE_TO_TRAIN["round_of_32"], r32_date)
         winner, sa, sb = sample_ko(probs, ta, tb)
         r32_winners.append(winner)
         update_state(state, harmonize(ta), harmonize(tb), sa, sb, r32_date)
@@ -151,7 +130,7 @@ def run_one_sim(model, fl, base_state, cf, base_groups, remaining_matches):
     r16_date = pd.Timestamp('2026-07-04')
     r16_winners = []
     for ta, tb in r16_pairs:
-        probs = predict_probs(model, fl, ta, tb, state, cf, 2, r16_date)
+        probs = predict_probs(model, fl, ta, tb, state, cf, WC2026_STAGE_TO_TRAIN["round_of_16"], r16_date)
         winner, sa, sb = sample_ko(probs, ta, tb)
         r16_winners.append(winner)
         update_state(state, harmonize(ta), harmonize(tb), sa, sb, r16_date)
@@ -166,7 +145,7 @@ def run_one_sim(model, fl, base_state, cf, base_groups, remaining_matches):
     qf_date = pd.Timestamp('2026-07-09')
     qf_winners = []
     for ta, tb in qf_pairs:
-        probs = predict_probs(model, fl, ta, tb, state, cf, 3, qf_date)
+        probs = predict_probs(model, fl, ta, tb, state, cf, WC2026_STAGE_TO_TRAIN["quarterfinal"], qf_date)
         winner, sa, sb = sample_ko(probs, ta, tb)
         qf_winners.append(winner)
         update_state(state, harmonize(ta), harmonize(tb), sa, sb, qf_date)
@@ -179,19 +158,19 @@ def run_one_sim(model, fl, base_state, cf, base_groups, remaining_matches):
     sf_date = pd.Timestamp('2026-07-14')
     sf_winners, sf_losers = [], []
     for ta, tb in sf_pairs:
-        probs = predict_probs(model, fl, ta, tb, state, cf, 4, sf_date)
+        probs = predict_probs(model, fl, ta, tb, state, cf, WC2026_STAGE_TO_TRAIN["semifinal"], sf_date)
         winner, sa, sb = sample_ko(probs, ta, tb)
         sf_winners.append(winner)
         sf_losers.append(tb if winner == ta else ta)
         update_state(state, harmonize(ta), harmonize(tb), sa, sb, sf_date)
 
     # 3rd place
-    probs = predict_probs(model, fl, sf_losers[0], sf_losers[1], state, cf, 4, pd.Timestamp('2026-07-18'))
+    probs = predict_probs(model, fl, sf_losers[0], sf_losers[1], state, cf, WC2026_STAGE_TO_TRAIN["third_place"], pd.Timestamp('2026-07-18'))
     third_winner, _, _ = sample_ko(probs, sf_losers[0], sf_losers[1])
     third_loser = sf_losers[1] if third_winner == sf_losers[0] else sf_losers[0]
 
     # Final
-    probs = predict_probs(model, fl, sf_winners[0], sf_winners[1], state, cf, 5, pd.Timestamp('2026-07-19'))
+    probs = predict_probs(model, fl, sf_winners[0], sf_winners[1], state, cf, WC2026_STAGE_TO_TRAIN["final"], pd.Timestamp('2026-07-19'))
     champion, _, _ = sample_ko(probs, sf_winners[0], sf_winners[1])
     runner_up = sf_winners[1] if champion == sf_winners[0] else sf_winners[0]
 
@@ -239,17 +218,13 @@ def main():
     df = df[~((df['date'].dt.year == 2026) & (df['tournament'] == 'FIFA World Cup'))]
     df = df.sort_values('date').reset_index(drop=True)
 
-    state = defaultdict(lambda: {
-        'elo': INITIAL_ELO, 'form': [], 'goals_for': [], 'goals_against': [],
-        'last_match': None,
-        'h2h': defaultdict(lambda: {'matches': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'gf': 0, 'ga': 0}),
-        'wc_participations': 0, 'wc_titles': 0, 'wc_wins': 0, 'wc_matches': 0
-    })
+    state = defaultdict(make_team_state)
 
-    rows, labels = [], []
+    rows, labels, feature_dates = [], [], []
     country_feature_cache = {}
     active_wc_year = None
     active_wc_teams = set()
+    wc_stage_by_index = infer_world_cup_stage_map(df)
     for _, r in df.iterrows():
         ht, at = harmonize(r['home_team']), harmonize(r['away_team'])
         hs, aw = r['home_score'], r['away_score']
@@ -264,38 +239,17 @@ def main():
 
         if feature_year not in country_feature_cache:
             country_feature_cache[feature_year] = country_features_for_year(country_history, feature_year)
-        rows.append(compute_features(ht, at, state, country_feature_cache[feature_year], 0, r['date']))
+        neutral = parse_bool(r.get('neutral', True))
+        stage = wc_stage_by_index.get(int(r.name), 0) if is_world_cup else 0
+        rows.append(compute_features(ht, at, state, country_feature_cache[feature_year], stage, r['date'], neutral, not neutral))
         labels.append(0 if hs > aw else (1 if hs == aw else 2))
-        state[ht]['elo'], state[at]['elo'] = update_elo(state[ht]['elo'], state[at]['elo'], hs, aw)
-        for t, gf, ga, result in [(ht, hs, aw, 'W' if hs>aw else ('D' if hs==aw else 'L')),
-                                   (at, aw, hs, 'W' if aw>hs else ('D' if hs==aw else 'L'))]:
-            state[t]['form'].append(1 if result=='W' else (0.5 if result=='D' else 0))
-            state[t]['form'] = state[t]['form'][-20:]
-            state[t]['goals_for'] = (state[t]['goals_for'] + [gf])[-20:]
-            state[t]['goals_against'] = (state[t]['goals_against'] + [ga])[-20:]
-            state[t]['last_match'] = r['date']
-        h2h_key = tuple(sorted([ht, at]))
-        for t in [ht, at]: state[t]['h2h'][h2h_key]['matches'] += 1
-        if hs > aw:
-            state[ht]['h2h'][h2h_key]['wins'] += 1
-            state[at]['h2h'][h2h_key]['losses'] += 1
-        elif hs == aw:
-            state[ht]['h2h'][h2h_key]['draws'] += 1
-            state[at]['h2h'][h2h_key]['draws'] += 1
-        else:
-            state[ht]['h2h'][h2h_key]['losses'] += 1
-            state[at]['h2h'][h2h_key]['wins'] += 1
-        state[ht]['h2h'][h2h_key]['gf'] += hs
-        state[ht]['h2h'][h2h_key]['ga'] += aw
-        state[at]['h2h'][h2h_key]['gf'] += aw
-        state[at]['h2h'][h2h_key]['ga'] += hs
+        feature_dates.append(r['date'])
         if is_world_cup:
             if active_wc_year is None:
                 active_wc_year = feature_year
             active_wc_teams.update([ht, at])
-            for t in [ht, at]: state[t]['wc_matches'] += 1
-            if hs > aw: state[ht]['wc_wins'] += 1
-            elif hs < aw: state[at]['wc_wins'] += 1
+        apply_match_to_state(state, ht, at, hs, aw, r['date'],
+                             neutral=neutral, is_world_cup=is_world_cup)
 
     if active_wc_year is not None:
         finalize_world_cup_history(state, active_wc_year, active_wc_teams)
@@ -306,7 +260,7 @@ def main():
                                subsample=0.8, colsample_bytree=0.8,
                                objective='multi:softprob', num_class=3,
                                eval_metric='mlogloss', random_state=42, verbosity=0)
-    model, _metrics = fit_xgb_with_validation(model, X, y, label="XGBoost")
+    model, _metrics = fit_xgb_with_validation(model, X, y, label="XGBoost", dates=feature_dates)
     fl = X.columns.tolist()
     print(f"  Model trained on {len(X)} matches, {len(fl)} features")
 
