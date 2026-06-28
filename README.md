@@ -61,10 +61,38 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 - **Brazil:** Japan (R32, 74.0%) → Norway (R16, 91.5%) → England (QF, 66.1%) → Argentina (SF, 39.0%) → Spain (3rd, 66.1%)
 - **Spain:** Austria (R32, 74.0%) → Portugal (R16, 61.0%) → Belgium (QF, 66.1%) → France (SF, 39.0%) → Brazil (3rd)
 
-### Last Day Prediction Accuracy (June 26-27, 12 matches)
+### Last Day Prediction Accuracy (June 20-27, 40 matches)
 
 | Date | Match | Predicted | Actual | Result | Confidence |
 |------|-------|-----------|--------|--------|------------|
+| Jun 20 | Netherlands vs Sweden | Home win | 5-1 | ✅ | 60.5% |
+| Jun 20 | Tunisia vs Japan | Away win | 0-4 | ✅ | 54.5% |
+| Jun 20 | Germany vs Côte d'Ivoire | Home win | 2-1 | ✅ | 57.6% |
+| Jun 20 | Ecuador vs Curaçao | Home win | 0-0 | ❌ | 81.1% |
+| Jun 21 | Belgium vs IR Iran | Home win | 0-0 | ❌ | 45.6% |
+| Jun 21 | New Zealand vs Egypt | Away win | 1-3 | ✅ | 39.2% |
+| Jun 21 | Spain vs Saudi Arabia | Home win | 4-0 | ✅ | 78.6% |
+| Jun 21 | Uruguay vs Cape Verde | Home win | 2-2 | ❌ | 73.7% |
+| Jun 22 | France vs Iraq | Home win | 3-0 | ✅ | 71.1% |
+| Jun 22 | Norway vs Senegal | Home win | 3-2 | ❌ | 35.4% |
+| Jun 22 | Argentina vs Austria | Home win | 2-0 | ✅ | 74.0% |
+| Jun 22 | Jordan vs Algeria | Away win | 1-2 | ✅ | 54.4% |
+| Jun 23 | Portugal vs Uzbekistan | Home win | 5-0 | ✅ | 63.8% |
+| Jun 23 | Colombia vs DR Congo | Home win | 1-0 | ✅ | 75.4% |
+| Jun 23 | England vs Ghana | Home win | 0-0 | ❌ | 75.1% |
+| Jun 23 | Panama vs Croatia | Away win | 0-1 | ✅ | 55.7% |
+| Jun 24 | Morocco vs Haiti | Home win | 4-2 | ✅ | 65.0% |
+| Jun 24 | Bosnia Herzegovina vs Qatar | Home win | 3-1 | ✅ | 36.6% |
+| Jun 24 | Scotland vs Brazil | Away win | 0-3 | ✅ | 81.5% |
+| Jun 24 | South Africa vs Korea Republic | Home win | 1-0 | ❌ | 54.8% |
+| Jun 24 | Mexico vs Czech Republic | Home win | 3-0 | ✅ | 61.4% |
+| Jun 24 | Canada vs Switzerland | Home win | 1-2 | ❌ | 41.3% |
+| Jun 25 | USA vs Turkey | Home win | 2-3 | ❌ | 52.6% |
+| Jun 25 | Paraguay vs Australia | Draw | 0-0 | ✅ | 35.7% |
+| Jun 25 | Curaçao vs Côte d'Ivoire | Away win | 0-2 | ✅ | 62.8% |
+| Jun 25 | Ecuador vs Germany | Home win | 2-1 | ✅ | 37.9% |
+| Jun 25 | Japan vs Sweden | Home win | 1-1 | ❌ | 52.3% |
+| Jun 25 | Tunisia vs Netherlands | Away win | 1-3 | ✅ | 58.8% |
 | Jun 26 | Senegal vs Iraq | Home win | 5-0 | ✅ | 56.0% |
 | Jun 26 | Norway vs France | Away win | 1-4 | ✅ | 54.6% |
 | Jun 26 | Uruguay vs Spain | Away win | 0-1 | ✅ | 38.1% |
@@ -78,7 +106,7 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 | Jun 27 | DR Congo vs Uzbekistan | Away win | 3-1 | ❌ | 37.9% |
 | Jun 27 | Croatia vs Ghana | Home win | 2-1 | ✅ | 63.8% |
 
-**Yesterday's accuracy: 7/12 (58.3%)** — 5 correct outright predictions, 2 missed draws, 1 upset
+**Last batch accuracy: 26/40 (65.0%)** — 8 missed draws, 6 upsets
 
 **Full group stage backtest (72 matches): 63.9% accuracy (46/72)**
 - Log-loss: 0.8802
