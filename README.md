@@ -38,14 +38,14 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 | Match | Home | Away | Prediction | Confidence |
 |-------|------|------|------------|------------|
 | M73 | South Africa | Canada | **Canada** | 67.6% |
-| M74 | Germany | Bosnia Herzegovina | **Germany** | 74.0% |
+| M74 | Germany | Paraguay | **Germany** | 66.1% |
 | M75 | Netherlands | Morocco | **Netherlands** | 66.1% |
 | M76 | Brazil | Japan | **Brazil** | 74.0% |
-| M77 | France | Paraguay | **France** | 67.6% |
+| M77 | France | Sweden | **France** | 74.0% |
 | M78 | Côte d'Ivoire | Norway | **Norway** | 61.0% |
 | M79 | Mexico | Ecuador | **Ecuador** | 61.0% |
 | M80 | England | DR Congo | **England** | 90.8% |
-| M81 | USA | Sweden | **USA** | 66.1% |
+| M81 | USA | Bosnia and Herzegovina | **USA** | 67.6% |
 | M82 | Belgium | Senegal | **Belgium** | 67.6% |
 | M83 | Portugal | Croatia | **Portugal** | 66.1% |
 | M84 | Spain | Austria | **Spain** | 74.0% |
@@ -57,7 +57,7 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 ### Path to the Final
 
 - **Argentina:** Cape Verde (R32, 96.4%) → Australia (R16) → Colombia (QF, 66.1%) → Brazil (SF, 61.0%) → France (Final, 66.1%)
-- **France:** Paraguay (R32, 67.6%) → Germany (R16, 61.0%) → Netherlands (QF, 61.0%) → Spain (SF, 61.0%) → Argentina (Final)
+- **France:** Sweden (R32, 74.0%) → Germany (R16, 61.0%) → Netherlands (QF, 61.0%) → Spain (SF, 61.0%) → Argentina (Final)
 - **Brazil:** Japan (R32, 74.0%) → Norway (R16, 91.5%) → England (QF, 66.1%) → Argentina (SF, 39.0%) → Spain (3rd, 66.1%)
 - **Spain:** Austria (R32, 74.0%) → Portugal (R16, 61.0%) → Belgium (QF, 66.1%) → France (SF, 39.0%) → Brazil (3rd)
 
