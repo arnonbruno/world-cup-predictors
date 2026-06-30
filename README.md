@@ -4,13 +4,13 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 ## 2026 World Cup Prediction
 
-> **Prediction updated: June 28, 2026** (group stage complete)
+> **Prediction updated: June 30, 2026** (group stage + 4 R32 matches complete)
 
 | Place | Team | Probability |
 |-------|------|-------------|
-| 🥇 Champion | **Argentina** | 66.1% |
+| 🥇 Champion | **Brazil** | 66.1% |
 | 🥈 Runner-up | **France** | — |
-| 🥉 Third | **Brazil** | 66.1% (vs Spain) |
+| 🥉 Third | **Argentina** | 66.1% (vs Spain) |
 | 4th | **Spain** | — |
 
 ### Group Stage Results (all 72 matches complete)
@@ -35,33 +35,48 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 ### Round of 32
 
+| Match | Home | Away | Prediction | Confidence | Result |
+|-------|------|------|------------|------------|--------|
+| M73 | South Africa | Canada | **Canada** | 67.6% | ✅ Canada 1-0 |
+| M74 | Germany | Paraguay | **Germany** | 66.1% | ❌ Paraguay wins on pens (3-4) |
+| M75 | Netherlands | Morocco | **Netherlands** | 66.1% | ❌ Morocco wins on pens (2-3) |
+| M76 | Brazil | Japan | **Brazil** | 74.0% | ✅ Brazil 2-1 |
+| M77 | France | Sweden | **France** | 74.0% | *June 30* |
+| M78 | Côte d'Ivoire | Norway | **Norway** | 61.0% | *June 30* |
+| M79 | Mexico | Ecuador | **Ecuador** | 61.0% | *June 30* |
+| M80 | England | DR Congo | **England** | 90.8% | *July 1* |
+| M81 | USA | Bosnia and Herzegovina | **USA** | 67.6% | *July 1* |
+| M82 | Belgium | Senegal | **Belgium** | 67.6% | *July 1* |
+| M83 | Portugal | Croatia | **Portugal** | 66.1% | *July 2* |
+| M84 | Spain | Austria | **Spain** | 74.0% | *July 2* |
+| M85 | Switzerland | Algeria | **Switzerland** | 66.1% | *July 2* |
+| M86 | Argentina | Cape Verde | **Argentina** | 96.4% | *July 3* |
+| M87 | Colombia | Ghana | **Colombia** | 92.9% | *July 3* |
+| M88 | Australia | Egypt | **Australia** | 66.1% | *July 3* |
+
+**R32 accuracy: 2/4 (50%)** — 2 penalty upsets (Germany and Netherlands eliminated)
+
+### Round of 16
+
 | Match | Home | Away | Prediction | Confidence |
 |-------|------|------|------------|------------|
-| M73 | South Africa | Canada | **Canada** | 67.6% |
-| M74 | Germany | Paraguay | **Germany** | 66.1% |
-| M75 | Netherlands | Morocco | **Netherlands** | 66.1% |
-| M76 | Brazil | Japan | **Brazil** | 74.0% |
-| M77 | France | Sweden | **France** | 74.0% |
-| M78 | Côte d'Ivoire | Norway | **Norway** | 61.0% |
-| M79 | Mexico | Ecuador | **Ecuador** | 61.0% |
-| M80 | England | DR Congo | **England** | 90.8% |
-| M81 | USA | Bosnia and Herzegovina | **USA** | 67.6% |
-| M82 | Belgium | Senegal | **Belgium** | 67.6% |
-| M83 | Portugal | Croatia | **Portugal** | 66.1% |
-| M84 | Spain | Austria | **Spain** | 74.0% |
-| M85 | Switzerland | Algeria | **Switzerland** | 66.1% |
-| M86 | Argentina | Cape Verde | **Argentina** | 96.4% |
-| M87 | Colombia | Ghana | **Colombia** | 92.9% |
-| M88 | Australia | Egypt | **Australia** | 66.1% |
+| M89 | Canada | Morocco | **Morocco** | 68.8% |
+| M90 | Paraguay | France | **France** | 91.2% |
+| M91 | Brazil | Norway | **Brazil** | 85.6% |
+| M92 | Ecuador | England | **England** | 77.2% |
+| M93 | Portugal | Spain | **Spain** | 68.8% |
+| M94 | USA | Belgium | **Belgium** | 84.3% |
+| M95 | Argentina | Australia | **Argentina** | 84.1% |
+| M96 | Switzerland | Colombia | **Colombia** | 64.0% |
 
 ### Path to the Final
 
-- **Argentina:** Cape Verde (R32, 96.4%) → Australia (R16) → Colombia (QF, 66.1%) → Brazil (SF, 61.0%) → France (Final, 66.1%)
-- **France:** Sweden (R32, 74.0%) → Germany (R16, 61.0%) → Netherlands (QF, 61.0%) → Spain (SF, 61.0%) → Argentina (Final)
-- **Brazil:** Japan (R32, 74.0%) → Norway (R16, 91.5%) → England (QF, 66.1%) → Argentina (SF, 39.0%) → Spain (3rd, 66.1%)
-- **Spain:** Austria (R32, 74.0%) → Portugal (R16, 61.0%) → Belgium (QF, 66.1%) → France (SF, 39.0%) → Brazil (3rd)
+- **Brazil:** Japan (R32, 74.0%) ✅ → Norway (R16, 85.6%) → England (QF, 67.6%) → Argentina (SF, 61.0%) → France (Final, 66.1%)
+- **France:** Sweden (R32, 74.0%) → Paraguay (R16, 91.2%) → Netherlands (QF, 61.0%) → Spain (SF, 61.0%) → Brazil (Final)
+- **Argentina:** Cape Verde (R32, 96.4%) → Australia (R16, 84.1%) → Colombia (QF, 66.1%) → Brazil (SF, 39.0%) → Spain (3rd, 66.1%)
+- **Spain:** Austria (R32, 74.0%) → Portugal (R16, 68.8%) → Belgium (QF, 66.1%) → France (SF, 39.0%) → Argentina (3rd)
 
-### Last Day Prediction Accuracy (June 20-27, 40 matches)
+### Recent Prediction Accuracy (June 20-29, 44 matches)
 
 | Date | Match | Predicted | Actual | Result | Confidence |
 |------|-------|-----------|--------|--------|------------|
@@ -105,11 +120,15 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 | Jun 27 | Colombia vs Portugal | Home win | 0-0 | ❌ | 40.9% |
 | Jun 27 | DR Congo vs Uzbekistan | Away win | 3-1 | ❌ | 37.9% |
 | Jun 27 | Croatia vs Ghana | Home win | 2-1 | ✅ | 63.8% |
+| Jun 28 | South Africa vs Canada 🏆 | Away win | 0-1 | ✅ | 49.9% |
+| Jun 29 | Brazil vs Japan 🏆 | Home win | 2-1 | ✅ | 69.4% |
+| Jun 29 | Germany vs Paraguay 🏆 | Home win | 1-1 (pens) | ❌ | 48.1% |
+| Jun 29 | Netherlands vs Morocco 🏆 | Home win | 1-1 (pens) | ❌ | 44.5% |
 
-**Last batch accuracy: 26/40 (65.0%)** — 8 missed draws, 6 upsets
+**Group stage accuracy: 26/40 (65.0%)** — 8 missed draws, 6 upsets
 
-**Full group stage backtest (72 matches): 63.9% accuracy (46/72)**
-- Log-loss: 0.8802
+**Overall backtest (76 matches): 63.2% accuracy (48/76)**
+- Log-loss: 0.8810
 - Brier score: 0.1764
 
 ## How It Works
@@ -210,12 +229,12 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 
 **Note:** WC knockout calibration is weaker than overall calibration. At 80-90% confidence on WC matches specifically, actual accuracy is ~57%. The model is aware of this and applies WC-specific calibration for knockout predictions.
 
-### 2026 WC Group Stage Backtest (72 matches)
+### 2026 WC Group Stage Backtest (76 matches, including 4 R32)
 
 | Metric | Value |
 |--------|-------|
-| **Accuracy** | 63.9% (46/72) |
-| **Log-loss** | 0.8802 |
+| **Accuracy** | 63.2% (48/76) |
+| **Log-loss** | 0.8810 |
 | **Brier score** | 0.1764 |
 
 ### Model Evolution
