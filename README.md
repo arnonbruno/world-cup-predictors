@@ -4,7 +4,7 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 ## 2026 World Cup Prediction
 
-> **Prediction updated: July 01, 2026** (group stage + 6 R32 matches complete)
+> **Prediction updated: July 01, 2026** (7 R32 matches complete, 9 remaining)
 
 | Place | Team | Probability |
 |-------|------|-------------|
@@ -38,12 +38,12 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 | Match | Home | Away | Prediction | Confidence | Result |
 |-------|------|------|------------|------------|--------|
 | M73 | South Africa | Canada | **Canada** | 67.6% | ✅ Canada 1-0 |
-| M74 | Germany | Paraguay | **Germany** | 66.1% | ❌ Paraguay wins on pens (3-4) |
-| M75 | Netherlands | Morocco | **Netherlands** | 66.1% | ❌ Morocco wins on pens (2-3) |
+| M74 | Germany | Paraguay | **Germany** | 66.1% | ❌ Paraguay wins on pens (1-1, 3-4) |
+| M75 | Netherlands | Morocco | **Netherlands** | 66.1% | ❌ Morocco wins on pens (1-1, 2-3) |
 | M76 | Brazil | Japan | **Brazil** | 74.0% | ✅ Brazil 2-1 |
 | M77 | France | Sweden | **France** | 74.0% | ✅ France 3-0 |
 | M78 | Côte d'Ivoire | Norway | **Norway** | 61.0% | ✅ Norway 2-1 |
-| M79 | Mexico | Ecuador | **Ecuador** | 61.0% | *July 1* |
+| M79 | Mexico | Ecuador | **Ecuador** | 61.0% | ❌ Mexico 2-0 |
 | M80 | England | DR Congo | **England** | 90.8% | *July 1* |
 | M81 | USA | Bosnia and Herzegovina | **USA** | 74.0% | *July 1* |
 | M82 | Belgium | Senegal | **Belgium** | 67.6% | *July 2* |
@@ -54,7 +54,7 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 | M87 | Colombia | Ghana | **Colombia** | 95.1% | *July 3* |
 | M88 | Australia | Egypt | **Australia** | 66.1% | *July 3* |
 
-**R32 accuracy: 4/6 (67%)** — 2 penalty upsets (Germany and Netherlands eliminated)
+**R32 accuracy: 4/7 (57%)** — 3 upsets (2 penalty wins + Mexico over Ecuador)
 
 ### Round of 16
 
@@ -63,7 +63,7 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 | M89 | Canada | Morocco | **Morocco** | 66.1% |
 | M90 | Paraguay | France | **France** | 67.6% |
 | M91 | Brazil | Norway | **Brazil** | 74.0% |
-| M92 | Ecuador | England | **England** | 61.0% |
+| M92 | Mexico | England | **England** | 66.1% |
 | M93 | Portugal | Spain | **Spain** | 66.1% |
 | M94 | USA | Belgium | **Belgium** | 66.1% |
 | M95 | Argentina | Australia | **Argentina** | 74.0% |
@@ -212,13 +212,13 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 
 **Note:** WC knockout calibration is weaker than overall calibration. At 80-90% confidence on WC matches specifically, actual accuracy is ~57%. The model is aware of this and applies WC-specific calibration for knockout predictions.
 
-### 2026 WC Backtest (78 matches: 72 group + 6 R32)
+### 2026 WC Backtest (79 matches: 72 group + 7 R32)
 
 | Metric | Value |
 |--------|-------|
-| **Accuracy** | 62.8% (49/78) |
-| **Log-loss** | 0.8749 |
-| **Brier score** | 0.1752 |
+| **Accuracy** | 62.0% (49/79) |
+| **Log-loss** | 0.8826 |
+| **Brier score** | 0.1766 |
 
 ### Model Evolution
 
@@ -229,7 +229,7 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 | V3 (ensemble) | **64.5%** | **0.8858** | **0.1791** | Dixon-Coles, odds, calibration |
 | V4 (squad values) | 64.5% | 0.8897 | 0.1797 | +4 squad value features |
 | V5 (walk-forward) | 59.6% | **0.8795** | **0.1724** | 11,909-match validation |
-| V6 (LightGBM) | 62.8% | **0.8749** | **0.1752** | LightGBM, +15 features (form_score, streaks, clean_sheets, goal_diff), tradition dropped |
+| V6 (LightGBM) | 62.0% | **0.8826** | **0.1766** | LightGBM, +15 features (form_score, streaks, clean_sheets, goal_diff), tradition dropped |
 
 ## Data Sources
 
