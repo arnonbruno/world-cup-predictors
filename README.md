@@ -217,8 +217,8 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 | Metric | Value |
 |--------|-------|
 | **Accuracy** | 62.0% (49/79) |
-| **Log-loss** | 0.8826 |
-| **Brier score** | 0.1766 |
+| **Log-loss** | 0.8810 |
+| **Brier score** | 0.1765 |
 
 ### Model Evolution
 
@@ -229,7 +229,7 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 | V3 (ensemble) | **64.5%** | **0.8858** | **0.1791** | Dixon-Coles, odds, calibration |
 | V4 (squad values) | 64.5% | 0.8897 | 0.1797 | +4 squad value features |
 | V5 (walk-forward) | 59.6% | **0.8795** | **0.1724** | 11,909-match validation |
-| V6 (LightGBM) | 62.0% | **0.8826** | **0.1766** | LightGBM, +15 features (form_score, streaks, clean_sheets, goal_diff), tradition dropped |
+| V6 (LightGBM) | 62.0% | **0.8810** | **0.1765** | LightGBM, +15 features (form_score, streaks, clean_sheets, goal_diff), tradition dropped |
 
 ## Data Sources
 
