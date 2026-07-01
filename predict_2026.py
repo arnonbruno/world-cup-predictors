@@ -5,7 +5,6 @@ Uses correct Wikipedia standings + proper FIFA bracket.
 """
 import pandas as pd
 import numpy as np
-import xgboost as xgb
 import argparse
 from dataclasses import dataclass
 from collections import defaultdict
@@ -16,6 +15,8 @@ from shared import (
     KNOCKOUT_ALPHA,
     ODDS_FEATURE_COLUMNS,
     WC2026_STAGE_TO_TRAIN,
+    DEFAULT_GBT_MODEL,
+    TRADITION_FEATURE_COLUMNS,
     apply_wc_knockout_calibration,
     apply_group_result,
     apply_match_to_state,
@@ -24,7 +25,8 @@ from shared import (
     compute_match_features,
     country_feature_staleness_warnings,
     country_features_for_year,
-    fit_xgb_with_validation,
+    drop_feature_columns,
+    fit_gbt_with_validation,
     finalize_world_cup_history,
     finalize_feature_frame,
     prepare_prediction_frame,
@@ -110,7 +112,18 @@ def _tune_blend_alpha(model, poisson_model, X_val, y_val, val_meta):
     return float(best_alpha)
 
 
-def train_model_bundle(results_df, country_history, exclude_2026_wc=True, odds=None, squad_values=None):
+def train_model_bundle(
+    results_df,
+    country_history,
+    exclude_2026_wc=True,
+    odds=None,
+    squad_values=None,
+    *,
+    model_type: str | None = None,
+    exclude_tradition: bool = True,
+    hyperopt_trials: int = 0,
+    lgbm_params: dict | None = None,
+):
     if odds is None:
         odds = load_betting_odds()
     if squad_values is None:
@@ -162,16 +175,23 @@ def train_model_bundle(results_df, country_history, exclude_2026_wc=True, odds=N
         finalize_world_cup_history(state, active_wc_year, active_wc_teams)
     
     X = finalize_feature_frame(rows)
+    if exclude_tradition:
+        X = drop_feature_columns(X, TRADITION_FEATURE_COLUMNS)
     y = np.array(labels)
     weights = sample_weights(y, feature_dates)
-    model = xgb.XGBClassifier(n_estimators=300, max_depth=6, learning_rate=0.1,
-                               subsample=0.8, colsample_bytree=0.8,
-                               objective='multi:softprob', num_class=3,
-                               eval_metric='mlogloss', random_state=42, verbosity=0)
-    model, _metrics = fit_xgb_with_validation(model, X, y, label="XGBoost",
-                                              dates=feature_dates,
-                                              sample_weight=weights, calibrate=True)
-    print(f"  Trained on {len(X)} matches")
+    model_type = (model_type or DEFAULT_GBT_MODEL).lower()
+    gbt_label = "LightGBM" if model_type == "lgbm" else "XGBoost"
+    trials = hyperopt_trials if model_type == "lgbm" else 0
+    model, _metrics = fit_gbt_with_validation(
+        model_type, X, y,
+        dates=feature_dates,
+        sample_weight=weights,
+        calibrate=True,
+        lgbm_params=lgbm_params,
+        hyperopt_trials=trials,
+        label=gbt_label,
+    )
+    print(f"  Trained {gbt_label} on {len(X)} matches")
 
     poisson_model = fit_dixon_coles(results_df)
     order = pd.Series(pd.to_datetime(feature_dates, errors="coerce")).sort_values().index
@@ -179,7 +199,7 @@ def train_model_bundle(results_df, country_history, exclude_2026_wc=True, odds=N
     val_idx = order[split:]
     alpha = _tune_blend_alpha(model, poisson_model, X.iloc[val_idx], y[val_idx],
                               [match_meta[i] for i in val_idx])
-    print(f"  Tuned blend alpha (XGB weight) = {alpha:.2f}")
+    print(f"  Tuned blend alpha ({gbt_label} weight) = {alpha:.2f}")
     return PredictionBundle(
         model=model,
         state=state,
@@ -194,8 +214,22 @@ def train_model_bundle(results_df, country_history, exclude_2026_wc=True, odds=N
         squad_values=squad_values,
     )
 
-def train_model(results_df, country_history):
-    bundle = train_model_bundle(results_df, country_history)
+def train_model(
+    results_df,
+    country_history,
+    *,
+    model_type: str | None = None,
+    exclude_tradition: bool = True,
+    hyperopt_trials: int = 0,
+    lgbm_params: dict | None = None,
+):
+    bundle = train_model_bundle(
+        results_df,
+        country_history,
+        model_type=model_type,
+        exclude_tradition=exclude_tradition,
+        hyperopt_trials=hyperopt_trials,
+    )
     # Stash the ensemble pieces on module-level globals so main() can use them
     # without changing the historical (model, state, fl, X, y) return contract
     # that explain_match.py relies on.
@@ -310,22 +344,93 @@ def predict(model, fl, ta, tb, state, cf, stage, date, neutral=True, is_home=Fal
     details = predict_with_details(model, fl, ta, tb, state, cf, stage, date, neutral, is_home)
     return details.winner, details.confidence, details.p_home, details.p_draw, details.p_away
 
-def simulate_round(matches, name, stage, state, model, fl, cf, date, debug=False):
+
+# Actual penalty winners for WC 2026 R32 (not stored in CSV)
+PENALTY_WINNERS_2026 = {
+    frozenset(('Germany', 'Paraguay')): 'Paraguay',
+    frozenset(('Netherlands', 'Morocco')): 'Morocco',
+}
+
+
+def get_completed_knockout_results(results_df):
+    """Return completed WC 2026 knockout results keyed by sorted team pair."""
+    df = results_df.copy()
+    df["date"] = pd.to_datetime(df["date"])
+    wc26 = df[
+        (df["tournament"] == "FIFA World Cup")
+        & (df["date"].dt.year == 2026)
+        & (df["date"] >= pd.Timestamp("2026-06-28"))
+    ]
+    completed = wc26[wc26["home_score"].notna() & wc26["away_score"].notna()]
+    results = {}
+    for _, row in completed.iterrows():
+        ha = harmonize(row["home_team"])
+        at = harmonize(row["away_team"])
+        hs = int(row["home_score"])
+        aw = int(row["away_score"])
+        key = tuple(sorted([ha, at]))
+        results[key] = {
+            "home_team": ha,
+            "away_team": at,
+            "home_score": hs,
+            "away_score": aw,
+            "is_draw": hs == aw,
+        }
+    return results
+
+
+def simulate_round(matches, name, stage, state, model, fl, cf, date, debug=False, completed=None):
     print(f"\n{'=' * 70}")
     print(f"{name}")
     print(f"{'=' * 70}")
     winners = []
     for label, ta, tb in matches:
+        ha, at = harmonize(ta), harmonize(tb)
+        key = tuple(sorted([ha, at]))
+        penalty_note = None
+
+        if completed and key in completed:
+            result = completed[key]
+            if not result["is_draw"]:
+                winner = (
+                    result["home_team"]
+                    if result["home_score"] > result["away_score"]
+                    else result["away_team"]
+                )
+                winners.append(winner)
+                print(f"  {label}: {ta} vs {tb}")
+                print(
+                    f"    → ✅ {winner} [ACTUAL: {result['home_score']}-{result['away_score']}]"
+                )
+                continue
+            # Draw in CSV — check if we know the penalty winner
+            pen_key = frozenset([ha, at])
+            if pen_key in PENALTY_WINNERS_2026:
+                winner = harmonize(PENALTY_WINNERS_2026[pen_key])
+                winners.append(winner)
+                print(f"  {label}: {ta} vs {tb}")
+                print(
+                    f"    → ✅ {winner} [ACTUAL: {result['home_score']}-{result['away_score']} (penalties)]"
+                )
+                continue
+            # Unknown penalty winner — fall through to prediction
+            penalty_note = (
+                f"ACTUAL RESULT: {result['home_score']}-{result['away_score']} (penalties)"
+            )
+
         details = predict_with_details(model, fl, ta, tb, state, cf, stage, date)
         winner, prob, pa, pd_, pb = (
             details.winner, details.confidence, details.p_home, details.p_draw, details.p_away
         )
         winners.append(winner)
-        if winner == ta:
-            update_state(state, ta, tb, 2, 1, date)
-        else:
-            update_state(state, ta, tb, 1, 2, date)
+        if penalty_note is None:
+            if winner == ta:
+                update_state(state, ta, tb, 2, 1, date)
+            else:
+                update_state(state, ta, tb, 1, 2, date)
         print(f"  {label}: {ta} vs {tb}")
+        if penalty_note:
+            print(f"    {penalty_note}")
         if stage > 0:
             print(f"    → ✅ {winner} ({prob:.1%})  [WC-calibrated P({ta})={pa:.1%} P({tb})={pb:.1%}]")
             print(
@@ -363,6 +468,23 @@ def parse_args():
         action="store_true",
         help="Print model-component probabilities for knockout matches.",
     )
+    parser.add_argument(
+        "--model",
+        choices=("xgb", "lgbm"),
+        default=None,
+        help=f"Gradient-boosted tree backend (default: {DEFAULT_GBT_MODEL}).",
+    )
+    parser.add_argument(
+        "--exclude-tradition",
+        action="store_true",
+        help="Drop football_tradition / tradition_diff features.",
+    )
+    parser.add_argument(
+        "--hyperopt-trials",
+        type=int,
+        default=0,
+        help="Hyperopt trials for LightGBM tuning (default: 0, use baked-in params).",
+    )
     return parser.parse_args()
 
 def main():
@@ -385,7 +507,13 @@ def main():
         print(f"  WARNING: {note}")
     
     print("[2/4] Training model...")
-    model, state, fl, _train_X, _train_y = train_model(results, country_history)
+    model, state, fl, _train_X, _train_y = train_model(
+        results,
+        country_history,
+        model_type=args.model,
+        exclude_tradition=args.exclude_tradition,
+        hyperopt_trials=args.hyperopt_trials,
+    )
     global _WC_CALIBRATION_BUCKETS
     _WC_CALIBRATION_BUCKETS = wc_calibration_buckets()
     if _WC_CALIBRATION_BUCKETS:
@@ -467,8 +595,13 @@ def main():
     
     # === KNOCKOUT BRACKET ===
     r32 = build_round_of_32(gw, gr, best8)
-    
-    r32_w = simulate_round(r32, "ROUND OF 32", WC2026_STAGE_TO_TRAIN["round_of_32"], state, model, fl, cf, pd.Timestamp('2026-06-29'), debug=args.debug)
+    completed_r32 = get_completed_knockout_results(results)
+
+    r32_w = simulate_round(
+        r32, "ROUND OF 32", WC2026_STAGE_TO_TRAIN["round_of_32"],
+        state, model, fl, cf, pd.Timestamp('2026-06-29'),
+        debug=args.debug, completed=completed_r32,
+    )
     
     # FIFA bracket R16 pairings (from Wikipedia — NON-SEQUENTIAL crossover!)
     # M89: W73 vs W75 | M90: W74 vs W77 | M91: W76 vs W78 | M92: W79 vs W80

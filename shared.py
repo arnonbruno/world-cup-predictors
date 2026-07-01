@@ -64,6 +64,31 @@ COUNTRY_FEATURE_COLUMNS = [
     "football_tradition",
 ]
 
+# Match-level tradition features derived from ``football_tradition`` (see
+# ``compute_match_features``). Used for ablation studies and feature analysis.
+TRADITION_FEATURE_COLUMNS = [
+    "football_tradition",
+    "opp_football_tradition",
+    "tradition_diff",
+]
+
+# Default gradient-boosted tree backend after backtest comparison (``xgb`` | ``lgbm``).
+DEFAULT_GBT_MODEL = "lgbm"
+
+# Hyperopt-tuned LightGBM params (100 TPE trials, chronological 80/20 holdout, log-loss).
+LGBM_DEFAULT_PARAMS = {
+    "n_estimators": 963,
+    "max_depth": 5,
+    "num_leaves": 57,
+    "learning_rate": 0.013524545989201327,
+    "min_child_samples": 96,
+    "subsample": 0.7358169178252429,
+    "colsample_bytree": 0.5051207842691607,
+    "reg_alpha": 0.004018013300211406,
+    "reg_lambda": 2.5790710672484894e-08,
+    "min_split_gain": 0.3422570569407757,
+}
+
 # Betting-odds derived features merged onto matches that have bookmaker odds.
 # Matches without odds get NaN for every column (XGBoost handles missing values
 # natively, so no imputation is required). ``odds_overround`` is the bookmaker
@@ -880,6 +905,36 @@ def _elo_momentum(state_entry, lookback: int) -> float:
     return float(window[-1] - window[0])
 
 
+def _form_score(form, window=30):
+    """Sum of win(+1)/draw(0)/loss(-1) over last ``window`` matches."""
+    recent = form[-window:] if form else []
+    if not recent:
+        return 0
+    return sum(1 if f == 1 else (-1 if f == 0 else 0) for f in recent)
+
+
+def _current_streak(form, target):
+    """Count consecutive ``target`` values from the end of form list."""
+    streak = 0
+    for f in reversed(form):
+        if f == target:
+            streak += 1
+        else:
+            break
+    return streak
+
+
+def _unbeaten_streak(form) -> int:
+    """Count consecutive matches without a loss (form != 0) from the end."""
+    streak = 0
+    for f in reversed(form):
+        if f != 0:
+            streak += 1
+        else:
+            break
+    return streak
+
+
 def _opp_weighted_form(state_entry) -> float:
     """Recent win/draw points weighted by the strength of the opponent faced.
 
@@ -963,12 +1018,17 @@ def compute_match_features(team, opponent, state, country_features, stage_num, m
     ga10 = s["goals_against"][-10:] or [0]
     gf3 = s["goals_for"][-3:] or [0]
     ga3 = s["goals_against"][-3:] or [0]
+    opp_gf5 = o["goals_for"][-5:] or [0]
+    opp_ga5 = o["goals_against"][-5:] or [0]
+    team_form = s["form"] or [0.5]
+    opp_form_full = o["form"] or [0.5]
     rest = min((match_date - s["last_match"]).days if s["last_match"] else 30, 60)
     h2h_key = tuple(sorted([team, opponent]))
     h = s["h2h"].get(h2h_key, {"matches": 0, "wins": 0, "draws": 0, "losses": 0, "gf": 0, "ga": 0})
     h = _weighted_h2h_record(h, match_date)
     hm = max(h["matches"], 1)
-    cf, oc = country_features.get(team, {}), country_features.get(opponent, {})
+    cf = get_effective_country_features(team, country_features, state)
+    oc = get_effective_country_features(opponent, country_features, state)
 
     # ── Existing derived quantities ──
     form_win_rate = sum(1 for f in form if f == 1) / len(form)
@@ -1006,6 +1066,24 @@ def compute_match_features(team, opponent, state, country_features, stage_num, m
                                  + np.mean(o["goals_for"][-5:] or [0])
                                  + np.mean(o["goals_against"][-5:] or [0])) / 2.0
     low_scoring_indicator = 1.0 / (1.0 + expected_total_goals)
+
+    # Form score (last 30) and win/loss streaks.
+    form_score_30 = _form_score(team_form, 30)
+    opp_form_score_30 = _form_score(opp_form_full, 30)
+    form_score_diff = form_score_30 - opp_form_score_30
+    win_streak = _current_streak(team_form, 1)
+    opp_win_streak = _current_streak(opp_form_full, 1)
+    unbeaten_streak = _unbeaten_streak(team_form)
+    loss_streak = _current_streak(team_form, 0)
+    clean_sheets_5 = sum(1 for g in ga5 if g == 0)
+    clean_sheets_10 = sum(1 for g in ga10 if g == 0)
+    opp_clean_sheets_5 = sum(1 for g in opp_ga5 if g == 0)
+    gd_5 = float(np.mean(gf5) - np.mean(ga5))
+    gd_10 = float(np.mean(gf10) - np.mean(ga10))
+    opp_gd_5 = float(np.mean(opp_gf5) - np.mean(opp_ga5))
+    goal_diff_diff = gd_5 - opp_gd_5
+    scoring_rate_5 = sum(1 for g in gf5 if g > 0) / max(len(gf5), 1)
+    conceding_rate_5 = sum(1 for g in ga5 if g > 0) / max(len(ga5), 1)
 
     # 6. Bookmaker implied probabilities (single best predictor in the football
     #    literature). NaN when the match has no odds; XGBoost handles missing.
@@ -1073,6 +1151,21 @@ def compute_match_features(team, opponent, state, country_features, stage_num, m
         "combined_draw_rate": combined_draw_rate,
         "expected_total_goals": expected_total_goals,
         "low_scoring_indicator": low_scoring_indicator,
+        "form_score_30": form_score_30,
+        "opp_form_score_30": opp_form_score_30,
+        "form_score_diff": form_score_diff,
+        "win_streak": win_streak,
+        "opp_win_streak": opp_win_streak,
+        "unbeaten_streak": unbeaten_streak,
+        "loss_streak": loss_streak,
+        "clean_sheets_5": clean_sheets_5,
+        "clean_sheets_10": clean_sheets_10,
+        "opp_clean_sheets_5": opp_clean_sheets_5,
+        "goal_diff_5": gd_5,
+        "goal_diff_10": gd_10,
+        "goal_diff_diff": goal_diff_diff,
+        "scoring_rate_5": scoring_rate_5,
+        "conceding_rate_5": conceding_rate_5,
         # ── Bookmaker implied probabilities (NaN when no odds available) ──
         "implied_home_prob": odds_row.get("implied_home_prob", np.nan),
         "implied_draw_prob": odds_row.get("implied_draw_prob", np.nan),
@@ -1344,6 +1437,26 @@ def country_features_for_year(
         entry["country_features_stale"] = int(age > COUNTRY_FEATURE_STALE_YEARS)
         features[team] = entry
     return features
+
+
+def get_effective_country_features(team, country_features, state, year=2026):
+    """Return country features, substituting Elo-based proxies for stale data."""
+    cf = dict(country_features.get(team, {}))
+    age = cf.get("feature_age_years", 99)
+
+    if age > 10:
+        elo = state.get(team, {}).get("elo", 1500)
+        cf["football_power_index"] = max(0, (elo - 1000) / 5.5)
+
+        wc_matches = state.get(team, {}).get("wc_matches", 0)
+        wc_participations = state.get(team, {}).get("wc_participations", 0)
+        cf["football_tradition"] = min(100, wc_participations * 5 + wc_matches * 0.5)
+
+        cf["feature_year"] = year
+        cf["feature_age_years"] = 0
+        cf["country_features_stale"] = 0
+
+    return cf
 
 
 def country_feature_staleness_warnings(
@@ -1628,6 +1741,263 @@ class IsotonicProbabilityCalibrator:
         return self.classes_[np.argmax(self.predict_proba(X), axis=1)]
 
 
+def drop_feature_columns(X: pd.DataFrame, exclude: Sequence[str] | None) -> pd.DataFrame:
+    """Return a copy of ``X`` without the listed columns (no-op when empty)."""
+    if not exclude:
+        return X
+    drop = [c for c in exclude if c in X.columns]
+    return X.drop(columns=drop) if drop else X
+
+
+def analyze_tradition_correlation(X: pd.DataFrame) -> dict[str, float]:
+    """Pearson and Spearman correlation between ``tradition_diff`` and ``elo_diff``."""
+    if "tradition_diff" not in X.columns or "elo_diff" not in X.columns:
+        return {"pearson": float("nan"), "spearman": float("nan")}
+    td = X["tradition_diff"].astype(float)
+    ed = X["elo_diff"].astype(float)
+    pearson = float(td.corr(ed, method="pearson"))
+    spearman = float(td.corr(ed, method="spearman"))
+    return {"pearson": pearson, "spearman": spearman}
+
+
+def get_gbt_feature_importance(model, feature_names: Sequence[str], *, top_n: int = 15) -> pd.DataFrame:
+    """Extract gain-based feature importances from XGBoost or LightGBM."""
+    names = list(feature_names)
+    importances: np.ndarray | None = None
+    base = getattr(model, "base_model", model)
+    if hasattr(base, "feature_importances_"):
+        importances = np.asarray(base.feature_importances_, dtype=float)
+    elif hasattr(base, "get_booster"):
+        try:
+            score = base.get_booster().get_score(importance_type="gain")
+            importances = np.array([score.get(f, score.get(f"f{i}", 0.0)) for i, f in enumerate(names)], dtype=float)
+        except Exception:
+            pass
+    if importances is None:
+        return pd.DataFrame(columns=["feature", "importance"])
+    total = importances.sum()
+    if total > 0:
+        importances = importances / total
+    df = pd.DataFrame({"feature": names, "importance": importances})
+    return df.sort_values("importance", ascending=False).head(top_n).reset_index(drop=True)
+
+
+def chronological_train_val_split(
+    X: pd.DataFrame,
+    y: np.ndarray,
+    dates: Sequence | None = None,
+    sample_weight: Sequence | None = None,
+    *,
+    val_fraction: float = 0.2,
+):
+    """Chronological 80/20 split when dates are available, else stratified random holdout."""
+    sw = np.asarray(sample_weight, dtype=float) if sample_weight is not None else None
+    if dates is not None and len(dates) == len(X):
+        order = pd.Series(pd.to_datetime(dates, errors="coerce")).sort_values().index.to_numpy()
+        split = max(1, int(len(order) * (1.0 - val_fraction)))
+        if split >= len(order):
+            split = len(order) - 1
+        train_idx, val_idx = order[:split], order[split:]
+        split_label = "chronological holdout"
+    else:
+        stratify = y if min(np.bincount(y.astype(int))) >= 2 else None
+        idx = np.arange(len(X))
+        train_idx, val_idx = train_test_split(
+            idx, test_size=val_fraction, random_state=42, stratify=stratify
+        )
+        split_label = "random holdout"
+    X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
+    y_train, y_val = y[train_idx], y[val_idx]
+    sw_train = sw[train_idx] if sw is not None else None
+    sw_val = sw[val_idx] if sw is not None else None
+    return X_train, X_val, y_train, y_val, sw_train, sw_val, split_label, train_idx, val_idx
+
+
+def _wrap_with_isotonic(model, X_val, y_val, classes, sample_weight_val, label: str):
+    try:
+        return IsotonicProbabilityCalibrator(model, classes).fit(
+            X_val, y_val, sample_weight=sample_weight_val
+        )
+    except Exception as exc:  # pragma: no cover
+        print(f"  {label} calibration failed ({exc}); using uncalibrated model")
+        return model
+
+
+def _report_validation_metrics(estimator, X_val, y_val, label: str, split_label: str, calibrate: bool):
+    val_probs = estimator.predict_proba(X_val)
+    val_pred = np.argmax(val_probs, axis=1)
+    labels = sorted(np.unique(y_val).astype(int).tolist())
+    acc = accuracy_score(y_val, val_pred)
+    loss = log_loss(y_val, val_probs, labels=labels)
+    cal_tag = " (isotonic-calibrated)" if calibrate else ""
+    print(f"  {label} {split_label}{cal_tag} accuracy={acc:.3f}, log-loss={loss:.3f} ({len(X_val)} matches)")
+    return {"accuracy": float(acc), "log_loss": float(loss), "n_val": int(len(X_val)), "split": split_label}
+
+
+def create_xgb_classifier(**overrides):
+    import xgboost as xgb
+
+    params = {
+        "n_estimators": 300,
+        "max_depth": 6,
+        "learning_rate": 0.1,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "objective": "multi:softprob",
+        "num_class": 3,
+        "eval_metric": "mlogloss",
+        "random_state": 42,
+        "verbosity": 0,
+    }
+    params.update(overrides)
+    return xgb.XGBClassifier(**params)
+
+
+def create_lgbm_classifier(**overrides):
+    from lightgbm import LGBMClassifier
+
+    params = {
+        "objective": "multiclass",
+        "num_class": 3,
+        "random_state": 42,
+        "verbosity": -1,
+        **LGBM_DEFAULT_PARAMS,
+    }
+    params.update(overrides)
+    return LGBMClassifier(**params)
+
+
+def tune_lgbm_hyperopt(
+    X: pd.DataFrame,
+    y: np.ndarray,
+    *,
+    dates: Sequence | None = None,
+    sample_weight: Sequence | None = None,
+    n_trials: int = 100,
+    label: str = "LightGBM",
+) -> dict:
+    """Bayesian hyperparameter search (Hyperopt TPE) minimizing validation log-loss."""
+    from hyperopt import STATUS_OK, Trials, fmin, hp, tpe
+    from lightgbm import LGBMClassifier, early_stopping
+
+    X_train, X_val, y_train, y_val, sw_train, sw_val, split_label, _, _ = chronological_train_val_split(
+        X, y, dates, sample_weight
+    )
+    space = {
+        "n_estimators": hp.qloguniform("n_estimators", np.log(100), np.log(1000), 1),
+        "max_depth": hp.quniform("max_depth", 3, 12, 1),
+        "num_leaves": hp.quniform("num_leaves", 15, 255, 1),
+        "learning_rate": hp.loguniform("learning_rate", np.log(0.01), np.log(0.3)),
+        "min_child_samples": hp.quniform("min_child_samples", 5, 100, 1),
+        "subsample": hp.uniform("subsample", 0.5, 1.0),
+        "colsample_bytree": hp.uniform("colsample_bytree", 0.5, 1.0),
+        "reg_alpha": hp.loguniform("reg_alpha", np.log(1e-8), np.log(10.0)),
+        "reg_lambda": hp.loguniform("reg_lambda", np.log(1e-8), np.log(10.0)),
+        "min_split_gain": hp.uniform("min_split_gain", 0.0, 1.0),
+    }
+
+    def objective(raw_params):
+        params = {
+            "objective": "multiclass",
+            "num_class": 3,
+            "random_state": 42,
+            "verbosity": -1,
+            "n_estimators": int(raw_params["n_estimators"]),
+            "max_depth": int(raw_params["max_depth"]),
+            "num_leaves": int(raw_params["num_leaves"]),
+            "learning_rate": float(raw_params["learning_rate"]),
+            "min_child_samples": int(raw_params["min_child_samples"]),
+            "subsample": float(raw_params["subsample"]),
+            "colsample_bytree": float(raw_params["colsample_bytree"]),
+            "reg_alpha": float(raw_params["reg_alpha"]),
+            "reg_lambda": float(raw_params["reg_lambda"]),
+            "min_split_gain": float(raw_params["min_split_gain"]),
+        }
+        model = LGBMClassifier(**params)
+        fit_kwargs = {
+            "eval_set": [(X_val, y_val)],
+            "eval_metric": "multi_logloss",
+            "callbacks": [early_stopping(30, verbose=False)],
+        }
+        if sw_train is not None:
+            fit_kwargs["sample_weight"] = sw_train
+            fit_kwargs["eval_sample_weight"] = [sw_val]
+        try:
+            model.fit(X_train, y_train, **fit_kwargs)
+        except Exception:
+            return {"loss": float("inf"), "status": STATUS_OK}
+        probs = model.predict_proba(X_val)
+        loss = log_loss(y_val, probs, labels=[0, 1, 2])
+        return {"loss": loss, "status": STATUS_OK}
+
+    trials = Trials()
+    best = fmin(
+        fn=objective,
+        space=space,
+        algo=tpe.suggest,
+        max_evals=n_trials,
+        trials=trials,
+        rstate=np.random.default_rng(42),
+        show_progressbar=False,
+    )
+    best_params = {
+        "n_estimators": int(best["n_estimators"]),
+        "max_depth": int(best["max_depth"]),
+        "num_leaves": int(best["num_leaves"]),
+        "learning_rate": float(best["learning_rate"]),
+        "min_child_samples": int(best["min_child_samples"]),
+        "subsample": float(best["subsample"]),
+        "colsample_bytree": float(best["colsample_bytree"]),
+        "reg_alpha": float(best["reg_alpha"]),
+        "reg_lambda": float(best["reg_lambda"]),
+        "min_split_gain": float(best["min_split_gain"]),
+    }
+    best_loss = float(trials.best_trial["result"]["loss"])
+    print(f"  {label} Hyperopt ({n_trials} trials, {split_label}): best log-loss={best_loss:.4f}")
+    return best_params
+
+
+def fit_lgbm_with_validation(
+    model,
+    X: pd.DataFrame,
+    y: np.ndarray,
+    label: str = "LightGBM",
+    dates: Sequence | None = None,
+    sample_weight: Sequence | None = None,
+    calibrate: bool = False,
+):
+    """Fit a LightGBM classifier with chronological holdout and optional isotonic calibration."""
+    from lightgbm import early_stopping
+
+    X_train, X_val, y_train, y_val, sw_train, sw_val, split_label, _, _ = chronological_train_val_split(
+        X, y, dates, sample_weight
+    )
+    fit_kwargs = {
+        "eval_set": [(X_val, y_val)],
+        "eval_metric": "multi_logloss",
+        "callbacks": [early_stopping(30, verbose=False)],
+    }
+    if sw_train is not None:
+        fit_kwargs["sample_weight"] = sw_train
+        fit_kwargs["eval_sample_weight"] = [sw_val]
+    try:
+        model.fit(X_train, y_train, **fit_kwargs)
+    except TypeError:
+        fit_kwargs.pop("callbacks", None)
+        if sw_train is not None:
+            model.fit(X_train, y_train, sample_weight=sw_train, **{k: v for k, v in fit_kwargs.items() if k != "eval_sample_weight"})
+        else:
+            model.fit(X_train, y_train, **fit_kwargs)
+
+    estimator = model
+    if calibrate:
+        classes = getattr(model, "classes_", np.array(sorted(np.unique(y).astype(int).tolist())))
+        estimator = _wrap_with_isotonic(model, X_val, y_val, classes, sw_val, label)
+
+    metrics = _report_validation_metrics(estimator, X_val, y_val, label, split_label, calibrate)
+    return estimator, metrics
+
+
 def fit_xgb_with_validation(
     model,
     X: pd.DataFrame,
@@ -1646,32 +2016,9 @@ def fit_xgb_with_validation(
     exposes ``predict``/``predict_proba`` and the original estimator stays
     available as ``.base_model``.
     """
-    sw = np.asarray(sample_weight, dtype=float) if sample_weight is not None else None
-    if dates is not None and len(dates) == len(X):
-        order = pd.Series(pd.to_datetime(dates, errors="coerce")).sort_values().index
-        split = max(1, int(len(order) * 0.8))
-        if split >= len(order):
-            split = len(order) - 1
-        train_idx, val_idx = order[:split], order[split:]
-        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
-        y_train, y_val = y[train_idx], y[val_idx]
-        sw_train = sw[train_idx] if sw is not None else None
-        sw_val = sw[val_idx] if sw is not None else None
-        split_label = "chronological holdout"
-    else:
-        stratify = y if min(np.bincount(y.astype(int))) >= 2 else None
-        if sw is not None:
-            idx = np.arange(len(X))
-            tr, va = train_test_split(idx, test_size=0.2, random_state=42, stratify=stratify)
-            X_train, X_val = X.iloc[tr], X.iloc[va]
-            y_train, y_val = y[tr], y[va]
-            sw_train, sw_val = sw[tr], sw[va]
-        else:
-            X_train, X_val, y_train, y_val = train_test_split(
-                X, y, test_size=0.2, random_state=42, stratify=stratify
-            )
-            sw_train = sw_val = None
-        split_label = "random holdout"
+    X_train, X_val, y_train, y_val, sw_train, sw_val, split_label, _, _ = chronological_train_val_split(
+        X, y, dates, sample_weight
+    )
 
     fit_kwargs = {"eval_set": [(X_val, y_val)], "verbose": False}
     if sw_train is not None:
@@ -1691,20 +2038,46 @@ def fit_xgb_with_validation(
     estimator = model
     if calibrate:
         classes = getattr(model, "classes_", np.array(sorted(np.unique(y).astype(int).tolist())))
-        try:
-            estimator = IsotonicProbabilityCalibrator(model, classes).fit(X_val, y_val, sample_weight=sw_val)
-        except Exception as exc:  # pragma: no cover - calibration is best-effort
-            print(f"  {label} calibration failed ({exc}); using uncalibrated model")
-            estimator = model
+        estimator = _wrap_with_isotonic(model, X_val, y_val, classes, sw_val, label)
 
-    val_probs = estimator.predict_proba(X_val)
-    val_pred = np.argmax(val_probs, axis=1)
-    labels = sorted(np.unique(y).astype(int).tolist())
-    acc = accuracy_score(y_val, val_pred)
-    loss = log_loss(y_val, val_probs, labels=labels)
-    cal_tag = " (isotonic-calibrated)" if calibrate else ""
-    print(f"  {label} {split_label}{cal_tag} accuracy={acc:.3f}, log-loss={loss:.3f} ({len(X_val)} matches)")
-    return estimator, {"accuracy": float(acc), "log_loss": float(loss), "n_val": int(len(X_val)), "split": split_label}
+    metrics = _report_validation_metrics(estimator, X_val, y_val, label, split_label, calibrate)
+    return estimator, metrics
+
+
+def fit_gbt_with_validation(
+    model_type: str,
+    X: pd.DataFrame,
+    y: np.ndarray,
+    *,
+    dates: Sequence | None = None,
+    sample_weight: Sequence | None = None,
+    calibrate: bool = True,
+    lgbm_params: dict | None = None,
+    hyperopt_trials: int = 0,
+    label: str | None = None,
+):
+    """Train XGBoost or Hyperopt-tuned LightGBM with shared validation protocol."""
+    model_type = model_type.lower()
+    if model_type == "lgbm":
+        params = dict(LGBM_DEFAULT_PARAMS)
+        if lgbm_params:
+            params.update(lgbm_params)
+        if hyperopt_trials > 0:
+            tuned = tune_lgbm_hyperopt(
+                X, y, dates=dates, sample_weight=sample_weight, n_trials=hyperopt_trials,
+                label=label or "LightGBM",
+            )
+            params.update(tuned)
+        model = create_lgbm_classifier(**params)
+        return fit_lgbm_with_validation(
+            model, X, y, label=label or "LightGBM", dates=dates,
+            sample_weight=sample_weight, calibrate=calibrate,
+        )
+    model = create_xgb_classifier()
+    return fit_xgb_with_validation(
+        model, X, y, label=label or "XGBoost", dates=dates,
+        sample_weight=sample_weight, calibrate=calibrate,
+    )
 
 
 class DixonColesModel:

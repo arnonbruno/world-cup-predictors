@@ -1,17 +1,17 @@
 # FIFA World Cup 2026 Predictor
 
-Machine learning system that predicts FIFA World Cup match outcomes and tournament winners. Combines Elo ratings, match form, head-to-head records, squad market values, and bookmaker odds into an ensemble of XGBoost and Dixon-Coles Poisson models.
+Machine learning system that predicts FIFA World Cup match outcomes and tournament winners. Combines Elo ratings, match form, head-to-head records, squad market values, and bookmaker odds into an ensemble of LightGBM and Dixon-Coles Poisson models.
 
 ## 2026 World Cup Prediction
 
-> **Prediction updated: June 30, 2026** (group stage + 4 R32 matches complete)
+> **Prediction updated: July 01, 2026** (group stage + 6 R32 matches complete)
 
 | Place | Team | Probability |
 |-------|------|-------------|
-| 🥇 Champion | **Brazil** | 66.1% |
-| 🥈 Runner-up | **France** | — |
-| 🥉 Third | **Argentina** | 66.1% (vs Spain) |
-| 4th | **Spain** | — |
+| 🥇 Champion | **Argentina** | 66.1% |
+| 🥈 Runner-up | **Spain** | — |
+| 🥉 Third | **Brazil** | 66.1% (vs France) |
+| 4th | **France** | — |
 
 ### Group Stage Results (all 72 matches complete)
 
@@ -41,95 +41,64 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 | M74 | Germany | Paraguay | **Germany** | 66.1% | ❌ Paraguay wins on pens (3-4) |
 | M75 | Netherlands | Morocco | **Netherlands** | 66.1% | ❌ Morocco wins on pens (2-3) |
 | M76 | Brazil | Japan | **Brazil** | 74.0% | ✅ Brazil 2-1 |
-| M77 | France | Sweden | **France** | 74.0% | *June 30* |
-| M78 | Côte d'Ivoire | Norway | **Norway** | 61.0% | *June 30* |
-| M79 | Mexico | Ecuador | **Ecuador** | 61.0% | *June 30* |
+| M77 | France | Sweden | **France** | 74.0% | ✅ France 3-0 |
+| M78 | Côte d'Ivoire | Norway | **Norway** | 61.0% | ✅ Norway 2-1 |
+| M79 | Mexico | Ecuador | **Ecuador** | 61.0% | *July 1* |
 | M80 | England | DR Congo | **England** | 90.8% | *July 1* |
-| M81 | USA | Bosnia and Herzegovina | **USA** | 67.6% | *July 1* |
-| M82 | Belgium | Senegal | **Belgium** | 67.6% | *July 1* |
+| M81 | USA | Bosnia and Herzegovina | **USA** | 74.0% | *July 1* |
+| M82 | Belgium | Senegal | **Belgium** | 67.6% | *July 2* |
 | M83 | Portugal | Croatia | **Portugal** | 66.1% | *July 2* |
 | M84 | Spain | Austria | **Spain** | 74.0% | *July 2* |
-| M85 | Switzerland | Algeria | **Switzerland** | 66.1% | *July 2* |
-| M86 | Argentina | Cape Verde | **Argentina** | 96.4% | *July 3* |
-| M87 | Colombia | Ghana | **Colombia** | 92.9% | *July 3* |
+| M85 | Switzerland | Algeria | **Switzerland** | 61.0% | *July 2* |
+| M86 | Argentina | Cape Verde | **Argentina** | 96.8% | *July 3* |
+| M87 | Colombia | Ghana | **Colombia** | 95.1% | *July 3* |
 | M88 | Australia | Egypt | **Australia** | 66.1% | *July 3* |
 
-**R32 accuracy: 2/4 (50%)** — 2 penalty upsets (Germany and Netherlands eliminated)
+**R32 accuracy: 4/6 (67%)** — 2 penalty upsets (Germany and Netherlands eliminated)
 
 ### Round of 16
 
 | Match | Home | Away | Prediction | Confidence |
 |-------|------|------|------------|------------|
-| M89 | Canada | Morocco | **Morocco** | 68.8% |
-| M90 | Paraguay | France | **France** | 91.2% |
-| M91 | Brazil | Norway | **Brazil** | 85.6% |
-| M92 | Ecuador | England | **England** | 77.2% |
-| M93 | Portugal | Spain | **Spain** | 68.8% |
-| M94 | USA | Belgium | **Belgium** | 84.3% |
-| M95 | Argentina | Australia | **Argentina** | 84.1% |
-| M96 | Switzerland | Colombia | **Colombia** | 64.0% |
+| M89 | Canada | Morocco | **Morocco** | 66.1% |
+| M90 | Paraguay | France | **France** | 67.6% |
+| M91 | Brazil | Norway | **Brazil** | 74.0% |
+| M92 | Ecuador | England | **England** | 61.0% |
+| M93 | Portugal | Spain | **Spain** | 66.1% |
+| M94 | USA | Belgium | **Belgium** | 66.1% |
+| M95 | Argentina | Australia | **Argentina** | 74.0% |
+| M96 | Switzerland | Colombia | **Colombia** | 67.6% |
+
+### Quarterfinals
+
+| Match | Home | Away | Prediction | Confidence |
+|-------|------|------|------------|------------|
+| M97 | Morocco | France | **France** | 66.1% |
+| M98 | Spain | Belgium | **Spain** | 67.6% |
+| M99 | Brazil | England | **Brazil** | 66.1% |
+| M100 | Argentina | Colombia | **Argentina** | 66.1% |
+
+### Semifinals
+
+| Match | Home | Away | Prediction | Confidence |
+|-------|------|------|------------|------------|
+| M101 | France | Spain | **Spain** | 61.0% |
+| M102 | Brazil | Argentina | **Argentina** | 61.0% |
+
+### Third Place Match
+
+- France vs Brazil → **Brazil** (66.1%)
+
+### Final
+
+- Spain vs Argentina → **Argentina** (66.1%)
 
 ### Path to the Final
 
-- **Brazil:** Japan (R32, 74.0%) ✅ → Norway (R16, 85.6%) → England (QF, 67.6%) → Argentina (SF, 61.0%) → France (Final, 66.1%)
-- **France:** Sweden (R32, 74.0%) → Paraguay (R16, 91.2%) → Netherlands (QF, 61.0%) → Spain (SF, 61.0%) → Brazil (Final)
-- **Argentina:** Cape Verde (R32, 96.4%) → Australia (R16, 84.1%) → Colombia (QF, 66.1%) → Brazil (SF, 39.0%) → Spain (3rd, 66.1%)
-- **Spain:** Austria (R32, 74.0%) → Portugal (R16, 68.8%) → Belgium (QF, 66.1%) → France (SF, 39.0%) → Argentina (3rd)
-
-### Recent Prediction Accuracy (June 20-29, 44 matches)
-
-| Date | Match | Predicted | Actual | Result | Confidence |
-|------|-------|-----------|--------|--------|------------|
-| Jun 20 | Netherlands vs Sweden | Home win | 5-1 | ✅ | 60.5% |
-| Jun 20 | Tunisia vs Japan | Away win | 0-4 | ✅ | 54.5% |
-| Jun 20 | Germany vs Côte d'Ivoire | Home win | 2-1 | ✅ | 57.6% |
-| Jun 20 | Ecuador vs Curaçao | Home win | 0-0 | ❌ | 81.1% |
-| Jun 21 | Belgium vs IR Iran | Home win | 0-0 | ❌ | 45.6% |
-| Jun 21 | New Zealand vs Egypt | Away win | 1-3 | ✅ | 39.2% |
-| Jun 21 | Spain vs Saudi Arabia | Home win | 4-0 | ✅ | 78.6% |
-| Jun 21 | Uruguay vs Cape Verde | Home win | 2-2 | ❌ | 73.7% |
-| Jun 22 | France vs Iraq | Home win | 3-0 | ✅ | 71.1% |
-| Jun 22 | Norway vs Senegal | Home win | 3-2 | ❌ | 35.4% |
-| Jun 22 | Argentina vs Austria | Home win | 2-0 | ✅ | 74.0% |
-| Jun 22 | Jordan vs Algeria | Away win | 1-2 | ✅ | 54.4% |
-| Jun 23 | Portugal vs Uzbekistan | Home win | 5-0 | ✅ | 63.8% |
-| Jun 23 | Colombia vs DR Congo | Home win | 1-0 | ✅ | 75.4% |
-| Jun 23 | England vs Ghana | Home win | 0-0 | ❌ | 75.1% |
-| Jun 23 | Panama vs Croatia | Away win | 0-1 | ✅ | 55.7% |
-| Jun 24 | Morocco vs Haiti | Home win | 4-2 | ✅ | 65.0% |
-| Jun 24 | Bosnia Herzegovina vs Qatar | Home win | 3-1 | ✅ | 36.6% |
-| Jun 24 | Scotland vs Brazil | Away win | 0-3 | ✅ | 81.5% |
-| Jun 24 | South Africa vs Korea Republic | Home win | 1-0 | ❌ | 54.8% |
-| Jun 24 | Mexico vs Czech Republic | Home win | 3-0 | ✅ | 61.4% |
-| Jun 24 | Canada vs Switzerland | Home win | 1-2 | ❌ | 41.3% |
-| Jun 25 | USA vs Turkey | Home win | 2-3 | ❌ | 52.6% |
-| Jun 25 | Paraguay vs Australia | Draw | 0-0 | ✅ | 35.7% |
-| Jun 25 | Curaçao vs Côte d'Ivoire | Away win | 0-2 | ✅ | 62.8% |
-| Jun 25 | Ecuador vs Germany | Home win | 2-1 | ✅ | 37.9% |
-| Jun 25 | Japan vs Sweden | Home win | 1-1 | ❌ | 52.3% |
-| Jun 25 | Tunisia vs Netherlands | Away win | 1-3 | ✅ | 58.8% |
-| Jun 26 | Senegal vs Iraq | Home win | 5-0 | ✅ | 56.0% |
-| Jun 26 | Norway vs France | Away win | 1-4 | ✅ | 54.6% |
-| Jun 26 | Uruguay vs Spain | Away win | 0-1 | ✅ | 38.1% |
-| Jun 26 | New Zealand vs Belgium | Away win | 0-3 | ✅ | 62.4% |
-| Jun 26 | Egypt vs IR Iran | Away win | 1-1 | ❌ | 44.5% |
-| Jun 26 | Cape Verde vs Saudi Arabia | Away win | 0-0 | ❌ | 37.5% |
-| Jun 27 | Panama vs England | Away win | 0-2 | ✅ | 69.6% |
-| Jun 27 | Algeria vs Austria | Home win | 3-3 | ❌ | 36.9% |
-| Jun 27 | Jordan vs Argentina | Away win | 1-3 | ✅ | 88.5% |
-| Jun 27 | Colombia vs Portugal | Home win | 0-0 | ❌ | 40.9% |
-| Jun 27 | DR Congo vs Uzbekistan | Away win | 3-1 | ❌ | 37.9% |
-| Jun 27 | Croatia vs Ghana | Home win | 2-1 | ✅ | 63.8% |
-| Jun 28 | South Africa vs Canada 🏆 | Away win | 0-1 | ✅ | 49.9% |
-| Jun 29 | Brazil vs Japan 🏆 | Home win | 2-1 | ✅ | 69.4% |
-| Jun 29 | Germany vs Paraguay 🏆 | Home win | 1-1 (pens) | ❌ | 48.1% |
-| Jun 29 | Netherlands vs Morocco 🏆 | Home win | 1-1 (pens) | ❌ | 44.5% |
-
-**Group stage accuracy: 26/40 (65.0%)** — 8 missed draws, 6 upsets
-
-**Overall backtest (76 matches): 63.2% accuracy (48/76)**
-- Log-loss: 0.8810
-- Brier score: 0.1764
+- **Argentina:** Cape Verde (R32, 96.8%) → Australia (R16, 74.0%) → Colombia (QF, 66.1%) → Brazil (SF, 61.0%) → Spain (Final, 66.1%)
+- **Spain:** Austria (R32, 74.0%) → Portugal (R16, 66.1%) → Belgium (QF, 67.6%) → France (SF, 61.0%) → Argentina (Final, 33.9%)
+- **Brazil:** Japan (R32, 74.0%) ✅ → Norway (R16, 74.0%) → England (QF, 66.1%) → Argentina (SF, 39.0%) → France (3rd, 66.1%)
+- **France:** Sweden (R32, 74.0%) ✅ → Paraguay (R16, 67.6%) → Morocco (QF, 66.1%) → Spain (SF, 39.0%) → Brazil (3rd)
 
 ## How It Works
 
@@ -139,9 +108,9 @@ The system uses a **blended ensemble** of two models:
 
 1. **Dixon-Coles Poisson Goal Model** (75% weight for group stage, 50% for knockouts) — models goals scored as Poisson distributions with team-specific attack/defense strengths and home advantage. Naturally produces realistic draw probabilities. Blend weight tuned on chronological holdout.
 
-2. **XGBoost Classifier** (25% weight for group stage, 50% for knockouts) — gradient-boosted trees trained on 52+ features per match, with isotonic calibration, draw class weighting (1.6×), and time-decay sample weights (half-life: 4 years).
+2. **LightGBM Classifier** (25% weight for group stage, 50% for knockouts) — gradient-boosted trees trained on 60+ features per match, with isotonic calibration, draw class weighting (1.6×), and time-decay sample weights (half-life: 4 years). Hyperparameters tuned via Bayesian optimization (Hyperopt TPE, 100 trials). LightGBM selected over XGBoost after backtest comparison showed better log-loss calibration.
 
-### Features (52+ total)
+### Features (60+ total)
 
 **Team Strength (7):**
 - Elo rating (current), Elo difference, Elo sum
@@ -152,6 +121,20 @@ The system uses a **blended ensemble** of two models:
 - Avg goals scored/conceded (last 5 and 10 matches)
 - Elo momentum (change over last 5/10 matches, differential)
 - Attack/defense trend (recent 3 vs 10 match baseline)
+
+**Form Score & Streaks (7):**
+- Form score (last 30 matches: win=+1, draw=0, loss=-1, summed)
+- Current win streak, opponent win streak, unbeaten streak, loss streak
+- Form score differential vs opponent
+
+**Clean Sheets & Scoring (4):**
+- Clean sheets in last 5/10 matches
+- Scoring rate (fraction of last 5 with at least 1 goal)
+- Conceding rate (fraction of last 5 with at least 1 goal conceded)
+
+**Goal Difference (3):**
+- Goal difference (last 5 and 10 matches)
+- Goal difference differential vs opponent
 
 **Head-to-Head (5):**
 - H2H matches, win rate, draw rate (time-decayed, 15-year limit)
@@ -192,7 +175,7 @@ The system uses a **blended ensemble** of two models:
 3. **Feature engineering:** `shared.py` centralizes all feature computation — same code for training, backtest, and prediction
 4. **Validation:** Chronological holdout (last 20% of matches), NOT random split
 5. **Calibration:** Isotonic regression on holdout probabilities, WC-specific calibration for knockout matches
-6. **Missing data:** XGBoost handles NaN natively (odds and squad values absent for older matches)
+6. **Missing data:** LightGBM handles NaN natively (odds and squad values absent for older matches)
 
 ### Knockout Stage Handling
 
@@ -229,13 +212,13 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 
 **Note:** WC knockout calibration is weaker than overall calibration. At 80-90% confidence on WC matches specifically, actual accuracy is ~57%. The model is aware of this and applies WC-specific calibration for knockout predictions.
 
-### 2026 WC Group Stage Backtest (76 matches, including 4 R32)
+### 2026 WC Backtest (78 matches: 72 group + 6 R32)
 
 | Metric | Value |
 |--------|-------|
-| **Accuracy** | 63.2% (48/76) |
-| **Log-loss** | 0.8810 |
-| **Brier score** | 0.1764 |
+| **Accuracy** | 62.8% (49/78) |
+| **Log-loss** | 0.8749 |
+| **Brier score** | 0.1752 |
 
 ### Model Evolution
 
@@ -246,6 +229,7 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 | V3 (ensemble) | **64.5%** | **0.8858** | **0.1791** | Dixon-Coles, odds, calibration |
 | V4 (squad values) | 64.5% | 0.8897 | 0.1797 | +4 squad value features |
 | V5 (walk-forward) | 59.6% | **0.8795** | **0.1724** | 11,909-match validation |
+| V6 (LightGBM) | 62.8% | **0.8749** | **0.1752** | LightGBM, +15 features (form_score, streaks, clean_sheets, goal_diff), tradition dropped |
 
 ## Data Sources
 
@@ -293,7 +277,7 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 
 ```bash
 # Install dependencies
-pip install pandas numpy scikit-learn xgboost shap scipy matplotlib lightgbm optuna
+pip install pandas numpy scikit-learn xgboost shap scipy matplotlib lightgbm hyperopt
 
 # Download raw data (not in repo — too large)
 curl -o data/results.csv https://raw.githubusercontent.com/martj42/international_results/master/results.csv
@@ -301,8 +285,11 @@ curl -o data/goalscorers.csv https://raw.githubusercontent.com/martj42/internati
 curl -o data/shootouts.csv https://raw.githubusercontent.com/martj42/international_results/master/shootouts.csv
 
 # Run predictions
-python3 predict_2026.py              # Full bracket prediction
+python3 predict_2026.py              # Full bracket prediction (LightGBM, no tradition)
+python3 predict_2026.py --model xgb  # Use XGBoost instead
+python3 predict_2026.py --exclude-tradition False  # Include tradition features
 python3 backtest_2026_wc.py          # Walk-forward backtest (2026 matches)
+python3 backtest_2026_wc.py --compare # Compare XGBoost vs LightGBM variants
 python3 backtest_walkforward.py      # Walk-forward backtest (all 2014+ matches)
 python3 explain_match.py Brazil Japan --stage 1   # Match explanation with SHAP
 python3 monte_carlo_2026.py          # 10K tournament simulations
@@ -311,4 +298,4 @@ python3 feature_selection.py         # Feature importance analysis
 
 ## Requirements
 
-Python 3.11+ with: pandas, numpy, scikit-learn, xgboost, shap, scipy, matplotlib, lightgbm, optuna
+Python 3.11+ with: pandas, numpy, scikit-learn, xgboost, shap, scipy, matplotlib, lightgbm, hyperopt

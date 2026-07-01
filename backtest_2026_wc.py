@@ -8,56 +8,92 @@ For each completed 2026 WC match in chronological order:
 4. Move to next match
 
 Reports: accuracy, log-loss, Brier score, per-stage breakdown, and per-match details.
+
+Use ``--compare`` to evaluate XGBoost vs LightGBM (Hyperopt) with/without tradition features.
 """
-import sys
+from __future__ import annotations
+
+import argparse
 import warnings
-from pathlib import Path
+from collections import defaultdict
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 
 from shared import (
-    INITIAL_ELO,
     KNOCKOUT_ALPHA,
     DATA_DIR,
-    load_country_feature_history,
-    load_betting_odds,
-    odds_features_for_match,
-    load_squad_values,
-    country_features_for_year,
-    compute_match_features,
-    harmonize_country,
-    fit_xgb_with_validation,
-    apply_match_to_state,
-    infer_world_cup_stage_map,
-    make_team_state,
-    parse_bool,
-    finalize_world_cup_history,
-    finalize_feature_frame,
-    prepare_prediction_frame,
-    sample_weights,
-    fit_dixon_coles,
-    blend_probabilities,
+    DEFAULT_GBT_MODEL,
+    TRADITION_FEATURE_COLUMNS,
     GROUP_2026_TEAMS,
     WC2026_STAGE_TO_TRAIN,
+    analyze_tradition_correlation,
+    apply_match_to_state,
+    blend_probabilities,
+    compute_match_features,
+    country_features_for_year,
+    drop_feature_columns,
+    fit_dixon_coles,
+    fit_gbt_with_validation,
+    finalize_feature_frame,
+    finalize_world_cup_history,
+    get_gbt_feature_importance,
+    harmonize_country,
+    infer_world_cup_stage_map,
+    load_betting_odds,
+    load_country_feature_history,
+    load_squad_values,
+    make_team_state,
+    odds_features_for_match,
+    parse_bool,
+    prepare_prediction_frame,
+    sample_weights,
 )
-from collections import defaultdict
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 RESULT_LABELS = ["Home win", "Draw", "Away win"]
 WC_TEAM_SET = {harmonize_country(t) for teams in GROUP_2026_TEAMS.values() for t in teams}
 
 
+@dataclass
+class BacktestConfig:
+    model_type: str = DEFAULT_GBT_MODEL
+    exclude_tradition: bool = False
+    hyperopt_trials: int = 0
+    lgbm_params: dict | None = None
+    label: str = ""
+
+    @property
+    def name(self) -> str:
+        if self.label:
+            return self.label
+        model = self.model_type.upper()
+        trad = "no-tradition" if self.exclude_tradition else "tradition"
+        return f"{model}+{trad}"
+
+
+@dataclass
+class BacktestMetrics:
+    name: str
+    accuracy: float
+    log_loss: float
+    brier: float
+    correct: int
+    total: int
+    stage_metrics: dict
+    calibration: list[dict]
+
+
 def make_initial_state():
     return defaultdict(make_team_state)
 
 
-def _tune_blend_alpha(xgb_model, poisson_model, feature_names, X_val, y_val,
-                      val_meta):
-    """Pick the XGB/Poisson blend weight that minimizes holdout log-loss."""
+def _tune_blend_alpha(gbt_model, poisson_model, X_val, y_val, val_meta):
+    """Pick the GBT/Poisson blend weight that minimizes holdout log-loss."""
     from sklearn.metrics import log_loss as _ll
 
-    p_xgb = xgb_model.predict_proba(X_val)
+    p_gbt = gbt_model.predict_proba(X_val)
     p_pois = np.array([
         poisson_model.outcome_probs(h, a, neutral=neu)
         for (h, a, neu) in val_meta
@@ -65,7 +101,7 @@ def _tune_blend_alpha(xgb_model, poisson_model, feature_names, X_val, y_val,
     best_alpha, best_loss = 1.0, np.inf
     for alpha in np.linspace(0.0, 1.0, 21):
         blended = np.array([
-            blend_probabilities(p_xgb[i], p_pois[i], alpha) for i in range(len(p_xgb))
+            blend_probabilities(p_gbt[i], p_pois[i], alpha) for i in range(len(p_gbt))
         ])
         try:
             loss = _ll(y_val, blended, labels=[0, 1, 2])
@@ -76,15 +112,8 @@ def _tune_blend_alpha(xgb_model, poisson_model, feature_names, X_val, y_val,
     return float(best_alpha), float(best_loss)
 
 
-def train_model(results_df, country_history, odds=None, squad_values=None):
-    """Train XGBoost + Dixon-Coles on all pre-2026-WC matches.
-
-    Adds: bookmaker implied-probability features, time-decay + draw sample
-    weighting, isotonic calibration on the chronological holdout, and a
-    Dixon-Coles Poisson member whose blend weight is tuned on that same holdout.
-    """
-    import xgboost as xgb
-
+def build_training_matrix(results_df, country_history, odds=None, squad_values=None):
+    """Build pre-2026-WC feature matrix (shared by analysis and training)."""
     df = results_df.copy()
     df["date"] = pd.to_datetime(df["date"])
     df = df[~((df["date"].dt.year == 2026) & (df["tournament"] == "FIFA World Cup"))]
@@ -92,12 +121,10 @@ def train_model(results_df, country_history, odds=None, squad_values=None):
 
     state = make_initial_state()
     rows, labels, feature_dates = [], [], []
-    match_meta = []  # (home, away, neutral) aligned with rows, for Poisson blend
+    match_meta = []
     country_feature_cache = {}
     active_wc_year = None
     active_wc_teams = set()
-    # Stage labels (0=group .. 4=final) for historical WC matches, so the model
-    # actually learns what ``stage`` means instead of always seeing a constant 0.
     wc_stage_by_index = infer_world_cup_stage_map(df)
 
     for _, r in df.iterrows():
@@ -118,7 +145,7 @@ def train_model(results_df, country_history, odds=None, squad_values=None):
             active_wc_year, active_wc_teams = None, set()
 
         neutral = parse_bool(r.get("neutral", True))
-        is_home = not neutral  # home side of a non-neutral fixture has home advantage
+        is_home = not neutral
         stage = wc_stage_by_index.get(int(r.name), 0) if is_world_cup else 0
         odds_row = odds_features_for_match(odds, r["date"], ht, at)
         rows.append(compute_match_features(
@@ -135,7 +162,6 @@ def train_model(results_df, country_history, odds=None, squad_values=None):
                 active_wc_year = feature_year
             active_wc_teams.update([ht, at])
 
-        # Single shared state update (Elo, form, goals, H2H, momentum, fatigue).
         apply_match_to_state(state, ht, at, hs, aw, r["date"],
                              neutral=neutral, is_world_cup=is_world_cup)
 
@@ -144,19 +170,38 @@ def train_model(results_df, country_history, odds=None, squad_values=None):
 
     X = finalize_feature_frame(rows)
     y = np.array(labels)
-    weights = sample_weights(y, feature_dates)
-    model = xgb.XGBClassifier(
-        objective="multi:softprob", num_class=3,
-        eval_metric="mlogloss", random_state=42, verbosity=0,
-        n_estimators=300, max_depth=6, learning_rate=0.05,
-        subsample=0.8, colsample_bytree=0.8,
+    return X, y, feature_dates, match_meta, state
+
+
+def train_model(
+    results_df,
+    country_history,
+    odds=None,
+    squad_values=None,
+    *,
+    config: BacktestConfig | None = None,
+):
+    """Train GBT + Dixon-Coles on all pre-2026-WC matches."""
+    config = config or BacktestConfig()
+    X, y, feature_dates, match_meta, state = build_training_matrix(
+        results_df, country_history, odds=odds, squad_values=squad_values,
     )
-    model, _ = fit_xgb_with_validation(
-        model, X, y, label="XGBoost", dates=feature_dates,
-        sample_weight=weights, calibrate=True,
+    if config.exclude_tradition:
+        X = drop_feature_columns(X, TRADITION_FEATURE_COLUMNS)
+
+    weights = sample_weights(y, feature_dates)
+    gbt_label = "LightGBM" if config.model_type == "lgbm" else "XGBoost"
+    trials = config.hyperopt_trials if config.model_type == "lgbm" else 0
+    model, _ = fit_gbt_with_validation(
+        config.model_type, X, y,
+        dates=feature_dates,
+        sample_weight=weights,
+        calibrate=True,
+        lgbm_params=config.lgbm_params,
+        hyperopt_trials=trials,
+        label=gbt_label,
     )
 
-    # Dixon-Coles Poisson member + blend-weight tuning on the chronological tail.
     print("  Fitting Dixon-Coles Poisson goal model...")
     poisson_model = fit_dixon_coles(results_df)
     order = pd.Series(pd.to_datetime(feature_dates, errors="coerce")).sort_values().index
@@ -165,35 +210,24 @@ def train_model(results_df, country_history, odds=None, squad_values=None):
     X_val = X.iloc[val_idx]
     y_val = y[val_idx]
     val_meta = [match_meta[i] for i in val_idx]
-    alpha, blend_loss = _tune_blend_alpha(model, poisson_model, X.columns.tolist(),
-                                          X_val, y_val, val_meta)
-    print(f"  Tuned blend alpha (XGB weight) = {alpha:.2f}  (holdout log-loss {blend_loss:.3f})")
+    alpha, blend_loss = _tune_blend_alpha(model, poisson_model, X_val, y_val, val_meta)
+    print(f"  Tuned blend alpha ({gbt_label} weight) = {alpha:.2f}  (holdout log-loss {blend_loss:.3f})")
     return model, state, X.columns.tolist(), poisson_model, alpha
 
 
 def prepare_2026_state(state, results_df):
     """Update state with completed 2026 WC group matches before backtest starts."""
-    df = results_df.copy()
-    df["date"] = pd.to_datetime(df["date"])
-    wc26 = df[(df["tournament"] == "FIFA World Cup") & (df["date"].dt.year == 2026)].copy()
-
-    # Add WC participations for all qualified teams
     for teams in GROUP_2026_TEAMS.values():
         for team in teams:
             ht = harmonize_country(team)
             state[ht]["wc_participations"] += 1
-
     return state
 
 
 def predict_match(model, feature_names, home, away, state, cf, stage, date,
                   neutral=True, is_home=False, odds=None,
                   poisson_model=None, alpha=1.0, squad_values=None):
-    """Predict a single match. Returns (predicted_label_idx, probs[3]).
-
-    Blends the (calibrated) XGBoost probabilities with the Dixon-Coles Poisson
-    member when one is supplied, then applies the knockout draw-renormalization.
-    """
+    """Predict a single match. Returns (predicted_label_idx, probs[3])."""
     odds_row = odds_features_for_match(odds, date, home, away)
     feat = compute_match_features(home, away, state, cf, stage, date,
                                   neutral=neutral, is_home=is_home, odds_row=odds_row,
@@ -206,7 +240,6 @@ def predict_match(model, feature_names, home, away, state, cf, stage, date,
         p_pois = poisson_model.outcome_probs(home, away, neutral=neutral)
         probs = blend_probabilities(probs, p_pois, blend_alpha)
 
-    # Knockout: renormalize away the draw probability.
     if stage > 0:
         total = probs[0] + probs[2]
         if total > 0:
@@ -217,23 +250,14 @@ def predict_match(model, feature_names, home, away, state, cf, stage, date,
 
 
 def actual_result(home_score, away_score):
-    """Return label index: 0=home win, 1=draw, 2=away win."""
     if home_score > away_score:
         return 0
-    elif home_score == away_score:
+    if home_score == away_score:
         return 1
-    else:
-        return 2
+    return 2
 
 
 def stage_from_tournament_round(tournament_str, home_team, away_team):
-    """Infer the *trained* stage code (0..4) from a tournament/round string.
-
-    The historical training data only contains stages 0..4 (group .. final), so
-    the 2026 bracket's richer R32/R16/QF/SF/Final scheme is collapsed onto that
-    range via ``WC2026_STAGE_TO_TRAIN``. Returning 5 or 6 (as before) asked the
-    model to predict on a ``stage`` value it had never seen during training.
-    """
     t = str(tournament_str).lower()
     if "group" in t:
         return WC2026_STAGE_TO_TRAIN["group"]
@@ -252,146 +276,22 @@ def stage_from_tournament_round(tournament_str, home_team, away_team):
     return 0
 
 
-def run_backtest():
-    print("=" * 70)
-    print("  WORLD CUP 2026 WALK-FORWARD BACKTEST")
-    print("=" * 70)
-    print()
-
-    # Load data
-    results_df = pd.read_csv(DATA_DIR / "results.csv")
-    country_history = load_country_feature_history()
-    odds = load_betting_odds()
-    print(f"Loaded bookmaker odds for {len(odds) // 2} fixtures.")
-    squad_values = load_squad_values()
-    print(f"Loaded squad values for {len(squad_values)} team-years.")
-
-    # Train model on all pre-2026-WC data
-    print("Training model on historical data (excluding 2026 WC)...")
-    model, state, feature_names, poisson_model, alpha = train_model(
-        results_df, country_history, odds=odds, squad_values=squad_values,
-    )
-    print(f"  Trained on {sum(1 for _, r in results_df.iterrows() if r['home_score'] == r['home_score'])} matches")
-    print()
-
-    # Prepare 2026 state
-    state = prepare_2026_state(state, results_df)
-
-    # Get the latest feature vintage available for the 2026 prediction year.
-    cf = country_features_for_year(country_history, 2026)
-
-    # Get all 2026 WC matches with scores, sorted chronologically
-    results_df["date"] = pd.to_datetime(results_df["date"])
-    wc26 = results_df[
-        (results_df["tournament"] == "FIFA World Cup") & (results_df["date"].dt.year == 2026)
-    ].copy()
-    wc26 = wc26.sort_values("date").reset_index(drop=True)
-    completed = wc26[wc26["home_score"].notna() & wc26["away_score"].notna()].copy()
-
-    print(f"Backtesting {len(completed)} completed matches...")
-    print()
-
-    # Walk forward
-    results = []
-    correct = 0
-    total = 0
-    probs_list = []
-    actuals = []
-
-    for idx, r in completed.iterrows():
-        home = harmonize_country(r["home_team"])
-        away = harmonize_country(r["away_team"])
-        hs = int(r["home_score"])
-        aw = int(r["away_score"])
-        date = r["date"]
-        stage = stage_from_tournament_round(r.get("tournament", ""), home, away)
-        neutral = parse_bool(r.get("neutral", True))
-        is_home = not neutral
-
-        # Predict BEFORE updating state with this match's result
-        predicted_idx, probs = predict_match(
-            model, feature_names, home, away, state, cf, stage, date,
-            neutral=neutral, is_home=is_home,
-            odds=odds, poisson_model=poisson_model, alpha=alpha,
-            squad_values=squad_values,
-        )
-        actual_idx = actual_result(hs, aw)
-
-        is_correct = predicted_idx == actual_idx
-        if is_correct:
-            correct += 1
-        total += 1
-
-        probs_list.append(probs)
-        actuals.append(actual_idx)
-
-        # Record
-        predicted_label = RESULT_LABELS[predicted_idx]
-        actual_label = RESULT_LABELS[actual_idx]
-        confidence = float(probs[predicted_idx])
-        actual_prob = float(probs[actual_idx])
-
-        results.append({
-            "date": date.strftime("%Y-%m-%d"),
-            "home": home,
-            "away": away,
-            "score": f"{hs}-{aw}",
-            "stage": stage,
-            "predicted": predicted_label,
-            "actual": actual_label,
-            "correct": is_correct,
-            "confidence": confidence,
-            "actual_prob": actual_prob,
-            "p_home": float(probs[0]),
-            "p_draw": float(probs[1]),
-            "p_away": float(probs[2]),
-        })
-
-        # Update state with the actual result (Elo, form, goals, H2H, momentum,
-        # fatigue) through the single shared updater. 2026 WC matches count as WC.
-        apply_match_to_state(state, home, away, hs, aw, date,
-                             neutral=neutral, is_world_cup=True)
-
-    # ─── Metrics ────────────────────────────────────────────────────────────
-    probs_arr = np.array(probs_list)
-    actuals_arr = np.array(actuals)
-
-    # Accuracy
-    accuracy = correct / total
-
-    # Log-loss
+def _compute_metrics(results: list[dict]) -> BacktestMetrics:
+    total = len(results)
+    correct = sum(1 for r in results if r["correct"])
     eps = 1e-15
     log_losses = []
-    for i in range(total):
-        p = max(min(probs_arr[i][actuals_arr[i]], 1 - eps), eps)
+    brier = 0.0
+    for r in results:
+        p = max(min(r["actual_prob"], 1 - eps), eps)
         log_losses.append(-np.log(p))
-    avg_log_loss = np.mean(log_losses)
-
-    # Brier score (multiclass)
-    brier = 0
-    for i in range(total):
         one_hot = np.zeros(3)
-        one_hot[actuals_arr[i]] = 1.0
-        brier += np.mean((probs_arr[i] - one_hot) ** 2)
-    brier /= total
+        one_hot[r["actual_idx"]] = 1.0
+        probs = np.array([r["p_home"], r["p_draw"], r["p_away"]])
+        brier += np.mean((probs - one_hot) ** 2)
+    brier /= max(total, 1)
 
-    # ─── Report ─────────────────────────────────────────────────────────────
-    print()
-    print("=" * 70)
-    print("  RESULTS SUMMARY")
-    print("=" * 70)
-    print()
-    print(f"  Total matches:  {total}")
-    print(f"  Correct:        {correct}")
-    print(f"  Accuracy:       {accuracy:.1%}")
-    print(f"  Log-loss:       {avg_log_loss:.4f}")
-    print(f"  Brier score:    {brier:.4f}")
-    print()
-
-    # Per-stage breakdown
-    stage_names = {0: "Group Stage", 1: "Round of 32", 2: "Round of 16",
-                   3: "Quarterfinals", 4: "Semifinals", 5: "Third Place", 6: "Final"}
-    stage_results = {}
+    stage_results: dict[int, dict] = {}
     for r in results:
         s = r["stage"]
         if s not in stage_results:
@@ -402,66 +302,277 @@ def run_backtest():
         p = max(min(r["actual_prob"], 1 - eps), eps)
         stage_results[s]["log_losses"].append(-np.log(p))
 
+    calibration = []
+    for lo, hi in [(0.3, 0.4), (0.4, 0.5), (0.5, 0.6), (0.6, 0.7), (0.7, 0.8), (0.8, 0.9), (0.9, 1.0)]:
+        bucket = [r for r in results if lo <= r["confidence"] < hi]
+        if bucket:
+            calibration.append({
+                "range": f"{lo:.0%}-{hi:.0%}",
+                "n": len(bucket),
+                "avg_conf": float(np.mean([r["confidence"] for r in bucket])),
+                "accuracy": sum(1 for r in bucket if r["correct"]) / len(bucket),
+            })
+
+    return BacktestMetrics(
+        name="",
+        accuracy=correct / max(total, 1),
+        log_loss=float(np.mean(log_losses)) if log_losses else float("nan"),
+        brier=float(brier),
+        correct=correct,
+        total=total,
+        stage_metrics=stage_results,
+        calibration=calibration,
+    )
+
+
+def run_backtest(config: BacktestConfig | None = None, *, verbose: bool = True) -> tuple[list[dict], BacktestMetrics]:
+    config = config or BacktestConfig()
+    if verbose:
+        print("=" * 70)
+        print(f"  WORLD CUP 2026 WALK-FORWARD BACKTEST — {config.name}")
+        print("=" * 70)
+        print()
+
+    results_df = pd.read_csv(DATA_DIR / "results.csv")
+    country_history = load_country_feature_history()
+    odds = load_betting_odds()
+    squad_values = load_squad_values()
+    if verbose:
+        print(f"Loaded bookmaker odds for {len(odds) // 2} fixtures.")
+        print(f"Loaded squad values for {len(squad_values)} team-years.")
+        print("Training model on historical data (excluding 2026 WC)...")
+
+    model, state, feature_names, poisson_model, alpha = train_model(
+        results_df, country_history, odds=odds, squad_values=squad_values, config=config,
+    )
+    state = prepare_2026_state(state, results_df)
+    cf = country_features_for_year(country_history, 2026)
+
+    results_df["date"] = pd.to_datetime(results_df["date"])
+    wc26 = results_df[
+        (results_df["tournament"] == "FIFA World Cup") & (results_df["date"].dt.year == 2026)
+    ].copy()
+    completed = wc26[wc26["home_score"].notna() & wc26["away_score"].notna()].sort_values("date")
+
+    if verbose:
+        print(f"Backtesting {len(completed)} completed matches...")
+        print()
+
+    results = []
+    for _, r in completed.iterrows():
+        home = harmonize_country(r["home_team"])
+        away = harmonize_country(r["away_team"])
+        hs, aw = int(r["home_score"]), int(r["away_score"])
+        date = r["date"]
+        stage = stage_from_tournament_round(r.get("tournament", ""), home, away)
+        neutral = parse_bool(r.get("neutral", True))
+        is_home = not neutral
+
+        predicted_idx, probs = predict_match(
+            model, feature_names, home, away, state, cf, stage, date,
+            neutral=neutral, is_home=is_home,
+            odds=odds, poisson_model=poisson_model, alpha=alpha,
+            squad_values=squad_values,
+        )
+        actual_idx = actual_result(hs, aw)
+        is_correct = predicted_idx == actual_idx
+        results.append({
+            "date": date.strftime("%Y-%m-%d"),
+            "home": home,
+            "away": away,
+            "score": f"{hs}-{aw}",
+            "stage": stage,
+            "predicted": RESULT_LABELS[predicted_idx],
+            "actual": RESULT_LABELS[actual_idx],
+            "predicted_idx": predicted_idx,
+            "actual_idx": actual_idx,
+            "correct": is_correct,
+            "confidence": float(probs[predicted_idx]),
+            "actual_prob": float(probs[actual_idx]),
+            "p_home": float(probs[0]),
+            "p_draw": float(probs[1]),
+            "p_away": float(probs[2]),
+        })
+        apply_match_to_state(state, home, away, hs, aw, date,
+                             neutral=neutral, is_world_cup=True)
+
+    metrics = _compute_metrics(results)
+    metrics.name = config.name
+
+    if verbose:
+        _print_report(results, metrics)
+    return results, metrics
+
+
+def _print_report(results: list[dict], metrics: BacktestMetrics) -> None:
+    stage_names = {0: "Group Stage", 1: "Round of 32", 2: "Round of 16",
+                   3: "Quarterfinals", 4: "Semifinals", 5: "Third Place", 6: "Final"}
+    print()
+    print("=" * 70)
+    print(f"  RESULTS SUMMARY — {metrics.name}")
+    print("=" * 70)
+    print()
+    print(f"  Total matches:  {metrics.total}")
+    print(f"  Correct:        {metrics.correct}")
+    print(f"  Accuracy:       {metrics.accuracy:.1%}")
+    print(f"  Log-loss:       {metrics.log_loss:.4f}")
+    print(f"  Brier score:    {metrics.brier:.4f}")
+    print()
     print("  PER-STAGE BREAKDOWN:")
     print(f"  {'Stage':<20s} {'Correct':>8s} {'Total':>6s} {'Acc':>8s} {'LogLoss':>9s}")
     print("  " + "-" * 55)
-    for s in sorted(stage_results.keys()):
-        sr = stage_results[s]
+    for s in sorted(metrics.stage_metrics.keys()):
+        sr = metrics.stage_metrics[s]
         acc = sr["correct"] / sr["total"] if sr["total"] > 0 else 0
         ll = np.mean(sr["log_losses"]) if sr["log_losses"] else 0
         name = stage_names.get(s, f"Stage {s}")
         print(f"  {name:<20s} {sr['correct']:>8d} {sr['total']:>6d} {acc:>8.1%} {ll:>9.4f}")
     print()
-
-    # Confidence buckets
     print("  CALIBRATION (predicted confidence vs actual accuracy):")
-    buckets = [(0.3, 0.4), (0.4, 0.5), (0.5, 0.6), (0.6, 0.7), (0.7, 0.8), (0.8, 0.9), (0.9, 1.0)]
-    for lo, hi in buckets:
-        bucket = [r for r in results if lo <= r["confidence"] < hi]
-        if bucket:
-            bucket_acc = sum(1 for r in bucket if r["correct"]) / len(bucket)
-            avg_conf = np.mean([r["confidence"] for r in bucket])
-            print(f"    {lo:.0%}-{hi:.0%}: n={len(bucket):3d}, avg_conf={avg_conf:.1%}, actual_acc={bucket_acc:.1%}")
+    for row in metrics.calibration:
+        print(f"    {row['range']}: n={row['n']:3d}, avg_conf={row['avg_conf']:.1%}, actual_acc={row['accuracy']:.1%}")
     print()
+    print(f"Final accuracy: {metrics.accuracy:.1%} ({metrics.correct}/{metrics.total})")
+    print(f"Log-loss: {metrics.log_loss:.4f} | Brier: {metrics.brier:.4f}")
 
-    # Upsets (model was wrong with high confidence)
-    upsets = [r for r in results if not r["correct"] and r["confidence"] >= 0.6]
-    if upsets:
-        print(f"  UPSETS (wrong with ≥60% confidence): {len(upsets)}")
-        for r in sorted(upsets, key=lambda x: -x["confidence"]):
-            print(f"    {r['date']}: {r['home']} {r['score']} {r['away']} — "
-                  f"Predicted {r['predicted']} ({r['confidence']:.1%}), Actual {r['actual']}")
-        print()
 
-    # Correct high-confidence predictions
-    nailed = [r for r in results if r["correct"] and r["confidence"] >= 0.7]
-    if nailed:
-        print(f"  HIGH-CONFIDENCE CORRECT (≥70%): {len(nailed)}")
-        for r in sorted(nailed, key=lambda x: -x["confidence"])[:10]:
-            print(f"    {r['date']}: {r['home']} {r['score']} {r['away']} — "
-                  f"{r['predicted']} ({r['confidence']:.1%})")
-        print()
-
-    # Full match log
+def run_tradition_analysis(X: pd.DataFrame, y: np.ndarray, feature_dates: list) -> None:
+    """Print correlation check and XGBoost feature importance for tradition features."""
+    print("\n" + "=" * 70)
+    print("  TRADITION FEATURE ANALYSIS")
     print("=" * 70)
-    print("  FULL MATCH LOG")
+    corr = analyze_tradition_correlation(X)
+    print(f"\n  tradition_diff vs elo_diff:")
+    print(f"    Pearson r  = {corr['pearson']:.4f}")
+    print(f"    Spearman r = {corr['spearman']:.4f}")
+    if abs(corr["pearson"]) > 0.7 or abs(corr["spearman"]) > 0.7:
+        print("    → HIGH correlation (>0.7): tradition features likely redundant with Elo")
+    else:
+        print("    → Moderate correlation: tradition may carry independent signal")
+
+    from shared import create_xgb_classifier, fit_xgb_with_validation
+
+    weights = sample_weights(y, feature_dates)
+    model = create_xgb_classifier()
+    model, _ = fit_xgb_with_validation(
+        model, X, y, label="XGBoost (importance)", dates=feature_dates,
+        sample_weight=weights, calibrate=False,
+    )
+    imp = get_gbt_feature_importance(model, X.columns, top_n=20)
+    print("\n  Top 20 features by gain (normalized):")
+    for _, row in imp.iterrows():
+        marker = " ← tradition" if row["feature"] in TRADITION_FEATURE_COLUMNS else ""
+        print(f"    {row['feature']:<30s} {row['importance']:.4f}{marker}")
+
+    trad_in_top15 = imp.head(15)["feature"].isin(TRADITION_FEATURE_COLUMNS).any()
+    print(f"\n  Tradition features in top 15: {'YES' if trad_in_top15 else 'NO'}")
+
+
+def run_comparison(hyperopt_trials: int = 100) -> pd.DataFrame:
+    """Run all four model variants and print a comparison table."""
+    results_df = pd.read_csv(DATA_DIR / "results.csv")
+    country_history = load_country_feature_history()
+    odds = load_betting_odds()
+    squad_values = load_squad_values()
+
+    X, y, feature_dates, _, _ = build_training_matrix(
+        results_df, country_history, odds=odds, squad_values=squad_values,
+    )
+    run_tradition_analysis(X, y, feature_dates)
+
+    # Hyperopt once per feature set (with / without tradition).
+    from shared import tune_lgbm_hyperopt
+
+    print("\n  Tuning LightGBM (with tradition features)...")
+    lgbm_params_full = tune_lgbm_hyperopt(
+        X, y, dates=feature_dates, sample_weight=sample_weights(y, feature_dates),
+        n_trials=hyperopt_trials, label="LightGBM+tradition",
+    )
+    X_no_trad = drop_feature_columns(X, TRADITION_FEATURE_COLUMNS)
+    print("\n  Tuning LightGBM (without tradition features)...")
+    lgbm_params_no_trad = tune_lgbm_hyperopt(
+        X_no_trad, y, dates=feature_dates, sample_weight=sample_weights(y, feature_dates),
+        n_trials=hyperopt_trials, label="LightGBM-no-tradition",
+    )
+
+    variants = [
+        BacktestConfig(model_type="xgb", exclude_tradition=False, hyperopt_trials=0,
+                       label="XGBoost + tradition"),
+        BacktestConfig(model_type="xgb", exclude_tradition=True, hyperopt_trials=0,
+                       label="XGBoost − tradition"),
+        BacktestConfig(model_type="lgbm", exclude_tradition=False, hyperopt_trials=0,
+                       lgbm_params=lgbm_params_full, label="LightGBM + tradition"),
+        BacktestConfig(model_type="lgbm", exclude_tradition=True, hyperopt_trials=0,
+                       lgbm_params=lgbm_params_no_trad, label="LightGBM − tradition"),
+    ]
+
+    rows = []
+    all_metrics: list[BacktestMetrics] = []
+    for cfg in variants:
+        print("\n" + "#" * 70)
+        _, metrics = run_backtest(cfg, verbose=False)
+        all_metrics.append(metrics)
+        rows.append({
+            "variant": metrics.name,
+            "accuracy": metrics.accuracy,
+            "log_loss": metrics.log_loss,
+            "brier": metrics.brier,
+            "correct": metrics.correct,
+            "total": metrics.total,
+        })
+
+    table = pd.DataFrame(rows)
+    print("\n" + "=" * 70)
+    print("  MODEL COMPARISON (2026 WC walk-forward)")
     print("=" * 70)
     print()
-    print(f"  {'Date':<12s} {'Match':<35s} {'Score':>5s} {'Predicted':<12s} {'Actual':<12s} {'OK?':>3s} {'Conf':>6s}")
-    print("  " + "-" * 85)
-    for r in results:
-        match_str = f"{r['home']} vs {r['away']}"
-        ok = "✅" if r["correct"] else "❌"
-        print(f"  {r['date']:<12s} {match_str:<35s} {r['score']:>5s} {r['predicted']:<12s} {r['actual']:<12s} {ok:>3s} {r['confidence']:>6.1%}")
+    print(f"  {'Variant':<28s} {'Acc':>7s} {'LogLoss':>9s} {'Brier':>8s} {'Correct':>10s}")
+    print("  " + "-" * 65)
+    for _, r in table.iterrows():
+        print(f"  {r['variant']:<28s} {r['accuracy']:>7.1%} {r['log_loss']:>9.4f} "
+              f"{r['brier']:>8.4f} {int(r['correct']):>4d}/{int(r['total']):<4d}")
 
+    best_acc = table.loc[table["accuracy"].idxmax()]
+    best_ll = table.loc[table["log_loss"].idxmin()]
+    best_brier = table.loc[table["brier"].idxmin()]
     print()
-    print(f"Final accuracy: {accuracy:.1%} ({correct}/{total})")
-    print(f"Log-loss: {avg_log_loss:.4f} | Brier: {brier:.4f}")
+    print(f"  Best accuracy:  {best_acc['variant']} ({best_acc['accuracy']:.1%})")
+    print(f"  Best log-loss:  {best_ll['variant']} ({best_ll['log_loss']:.4f})")
+    print(f"  Best Brier:     {best_brier['variant']} ({best_brier['brier']:.4f})")
 
-    return results
+    # Per-stage for best log-loss variant
+    best_metrics = next(m for m in all_metrics if m.name == best_ll["variant"])
+    stage_names = {0: "Group", 1: "R32", 2: "R16", 3: "QF", 4: "SF", 5: "3rd", 6: "Final"}
+    print(f"\n  Per-stage metrics for best log-loss ({best_ll['variant']}):")
+    for s in sorted(best_metrics.stage_metrics.keys()):
+        sr = best_metrics.stage_metrics[s]
+        acc = sr["correct"] / sr["total"] if sr["total"] else 0
+        ll = np.mean(sr["log_losses"]) if sr["log_losses"] else 0
+        print(f"    {stage_names.get(s, s):<8s}  acc={acc:.1%}  log-loss={ll:.4f}  n={sr['total']}")
+
+    return table
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="2026 WC walk-forward backtest")
+    parser.add_argument("--compare", action="store_true",
+                        help="Compare XGBoost vs LightGBM with/without tradition features")
+    parser.add_argument("--model", choices=("xgb", "lgbm"), default=DEFAULT_GBT_MODEL)
+    parser.add_argument("--exclude-tradition", action="store_true")
+    parser.add_argument("--hyperopt-trials", type=int, default=100)
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
+    args = parse_args()
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=FutureWarning)
-        run_backtest()
+        if args.compare:
+            run_comparison(hyperopt_trials=args.hyperopt_trials)
+        else:
+            cfg = BacktestConfig(
+                model_type=args.model,
+                exclude_tradition=args.exclude_tradition,
+                hyperopt_trials=args.hyperopt_trials,
+            )
+            run_backtest(cfg)
