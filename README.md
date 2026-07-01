@@ -4,7 +4,7 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 ## 2026 World Cup Prediction
 
-> **Prediction updated: July 01, 2026** (7 R32 matches complete, 9 remaining)
+> **Prediction updated: July 01, 2026** (9 R32 matches complete, 7 remaining)
 
 | Place | Team | Probability |
 |-------|------|-------------|
@@ -44,9 +44,9 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 | M77 | France | Sweden | **France** | 74.0% | ✅ France 3-0 |
 | M78 | Côte d'Ivoire | Norway | **Norway** | 61.0% | ✅ Norway 2-1 |
 | M79 | Mexico | Ecuador | **Ecuador** | 61.0% | ❌ Mexico 2-0 |
-| M80 | England | DR Congo | **England** | 90.8% | *July 1* |
+| M80 | England | DR Congo | **England** | 90.8% | ✅ England 2-1 |
 | M81 | USA | Bosnia and Herzegovina | **USA** | 74.0% | *July 1* |
-| M82 | Belgium | Senegal | **Belgium** | 67.6% | *July 2* |
+| M82 | Belgium | Senegal | **Belgium** | 67.6% | ✅ Belgium 3-2 (a.e.t.) |
 | M83 | Portugal | Croatia | **Portugal** | 66.1% | *July 2* |
 | M84 | Spain | Austria | **Spain** | 74.0% | *July 2* |
 | M85 | Switzerland | Algeria | **Switzerland** | 61.0% | *July 2* |
@@ -54,7 +54,7 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 | M87 | Colombia | Ghana | **Colombia** | 95.1% | *July 3* |
 | M88 | Australia | Egypt | **Australia** | 66.1% | *July 3* |
 
-**R32 accuracy: 4/7 (57%)** — 3 upsets (2 penalty wins + Mexico over Ecuador)
+**R32 accuracy: 6/9 (67%)** — 3 upsets (2 penalty wins + Mexico over Ecuador)
 
 ### Round of 16
 
@@ -212,13 +212,13 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 
 **Note:** WC knockout calibration is weaker than overall calibration. At 80-90% confidence on WC matches specifically, actual accuracy is ~57%. The model is aware of this and applies WC-specific calibration for knockout predictions.
 
-### 2026 WC Backtest (79 matches: 72 group + 7 R32)
+### 2026 WC Backtest (81 matches: 72 group + 9 R32)
 
 | Metric | Value |
 |--------|-------|
-| **Accuracy** | 62.0% (49/79) |
-| **Log-loss** | 0.8810 |
-| **Brier score** | 0.1765 |
+| **Accuracy** | 63.0% (51/81) |
+| **Log-loss** | 0.8737 |
+| **Brier score** | 0.1747 |
 
 ### Model Evolution
 
@@ -229,7 +229,7 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 | V3 (ensemble) | **64.5%** | **0.8858** | **0.1791** | Dixon-Coles, odds, calibration |
 | V4 (squad values) | 64.5% | 0.8897 | 0.1797 | +4 squad value features |
 | V5 (walk-forward) | 59.6% | **0.8795** | **0.1724** | 11,909-match validation |
-| V6 (LightGBM) | 62.0% | **0.8810** | **0.1765** | LightGBM, +15 features (form_score, streaks, clean_sheets, goal_diff), tradition dropped |
+| V6 (LightGBM) | 63.0% | **0.8737** | **0.1747** | LightGBM, +15 features (form_score, streaks, clean_sheets, goal_diff), tradition dropped |
 
 ## Data Sources
 
