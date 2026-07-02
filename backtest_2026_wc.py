@@ -46,9 +46,11 @@ from shared import (
     load_squad_values,
     make_team_state,
     odds_features_for_match,
-    parse_bool,
+    parse_neutral_flag,
     prepare_prediction_frame,
     sample_weights,
+    wc2026_penalty_winner,
+    wc2026_stage_for_match,
 )
 
 # ─── Constants ───────────────────────────────────────────────────────────────
@@ -144,7 +146,7 @@ def build_training_matrix(results_df, country_history, odds=None, squad_values=N
             finalize_world_cup_history(state, active_wc_year, active_wc_teams)
             active_wc_year, active_wc_teams = None, set()
 
-        neutral = parse_bool(r.get("neutral", True))
+        neutral = parse_neutral_flag(r.get("neutral", True))
         is_home = not neutral
         stage = wc_stage_by_index.get(int(r.name), 0) if is_world_cup else 0
         odds_row = odds_features_for_match(odds, r["date"], ht, at)
@@ -249,15 +251,28 @@ def predict_match(model, feature_names, home, away, state, cf, stage, date,
     return predicted, probs
 
 
-def actual_result(home_score, away_score):
+def actual_result(home_score, away_score, home_team=None, away_team=None, stage=0):
     if home_score > away_score:
         return 0
     if home_score == away_score:
+        if stage > 0 and home_team is not None and away_team is not None:
+            winner = wc2026_penalty_winner(home_team, away_team)
+            if winner == harmonize_country(home_team):
+                return 0
+            if winner == harmonize_country(away_team):
+                return 2
         return 1
     return 2
 
 
-def stage_from_tournament_round(tournament_str, home_team, away_team):
+def stage_from_tournament_round(tournament_str, home_team, away_team, date=None):
+    if date is not None:
+        try:
+            match_date = pd.to_datetime(date)
+            if str(tournament_str) == "FIFA World Cup" and match_date.year == 2026:
+                return wc2026_stage_for_match(match_date)
+        except Exception:
+            pass
     t = str(tournament_str).lower()
     if "group" in t:
         return WC2026_STAGE_TO_TRAIN["group"]
@@ -364,8 +379,8 @@ def run_backtest(config: BacktestConfig | None = None, *, verbose: bool = True) 
         away = harmonize_country(r["away_team"])
         hs, aw = int(r["home_score"]), int(r["away_score"])
         date = r["date"]
-        stage = stage_from_tournament_round(r.get("tournament", ""), home, away)
-        neutral = parse_bool(r.get("neutral", True))
+        stage = stage_from_tournament_round(r.get("tournament", ""), home, away, date=date)
+        neutral = parse_neutral_flag(r.get("neutral", True))
         is_home = not neutral
 
         predicted_idx, probs = predict_match(
@@ -374,7 +389,7 @@ def run_backtest(config: BacktestConfig | None = None, *, verbose: bool = True) 
             odds=odds, poisson_model=poisson_model, alpha=alpha,
             squad_values=squad_values,
         )
-        actual_idx = actual_result(hs, aw)
+        actual_idx = actual_result(hs, aw, home, away, stage)
         is_correct = predicted_idx == actual_idx
         results.append({
             "date": date.strftime("%Y-%m-%d"),

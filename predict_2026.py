@@ -40,10 +40,11 @@ from shared import (
     infer_world_cup_stage_map,
     load_country_feature_history,
     make_team_state,
-    parse_bool,
+    parse_neutral_flag,
     rank_third_place_teams,
     sorted_group_standings,
     wc_calibration_buckets,
+    wc2026_penalty_winner,
     update_elo,
 )
 warnings.filterwarnings('ignore')
@@ -156,7 +157,7 @@ def train_model_bundle(
         if feature_year not in country_feature_cache:
             country_feature_cache[feature_year] = country_features_for_year(country_history, feature_year)
         stage = wc_stage_by_index.get(int(r.name), 0) if is_world_cup else 0
-        neutral = parse_bool(r.get('neutral', True))
+        neutral = parse_neutral_flag(r.get('neutral', True))
         odds_row = odds_features_for_match(odds, r['date'], ht, at)
         rows.append(compute_features(ht, at, state, country_feature_cache[feature_year], stage, r['date'], neutral, not neutral, odds_row, squad_values))
         labels.append(0 if hs > aw else (1 if hs == aw else 2))
@@ -251,7 +252,7 @@ def prepare_2026_state(results, state):
     wc26['date'] = pd.to_datetime(wc26['date'])
     completed = wc26[wc26['home_score'].notna() & wc26['away_score'].notna()].sort_values('date')
     for _, r in completed.iterrows():
-        neutral = parse_bool(r.get('neutral', True))
+        neutral = parse_neutral_flag(r.get('neutral', True))
         update_state(state, r['home_team'], r['away_team'], int(r['home_score']), int(r['away_score']), r['date'], neutral=neutral)
     for teams in GROUP_2026_TEAMS.values():
         for team in teams:
@@ -345,13 +346,6 @@ def predict(model, fl, ta, tb, state, cf, stage, date, neutral=True, is_home=Fal
     return details.winner, details.confidence, details.p_home, details.p_draw, details.p_away
 
 
-# Actual penalty winners for WC 2026 R32 (not stored in CSV)
-PENALTY_WINNERS_2026 = {
-    frozenset(('Germany', 'Paraguay')): 'Paraguay',
-    frozenset(('Netherlands', 'Morocco')): 'Morocco',
-}
-
-
 def get_completed_knockout_results(results_df):
     """Return completed WC 2026 knockout results keyed by sorted team pair."""
     df = results_df.copy()
@@ -404,9 +398,8 @@ def simulate_round(matches, name, stage, state, model, fl, cf, date, debug=False
                 )
                 continue
             # Draw in CSV — check if we know the penalty winner
-            pen_key = frozenset([ha, at])
-            if pen_key in PENALTY_WINNERS_2026:
-                winner = harmonize(PENALTY_WINNERS_2026[pen_key])
+            winner = wc2026_penalty_winner(ha, at)
+            if winner:
                 winners.append(winner)
                 print(f"  {label}: {ta} vs {tb}")
                 print(

@@ -746,6 +746,22 @@ def harmonize_country(name: object) -> object:
     return NAME_ALIASES.get(text, text)
 
 
+# Actual penalty winners for completed WC 2026 knockout draws that are not
+# represented in results.csv. Keep this in shared code so backtests and bracket
+# predictions evaluate knockout winners consistently.
+WC2026_PENALTY_WINNERS = {
+    frozenset(("Germany", "Paraguay")): "Paraguay",
+    frozenset(("Netherlands", "Morocco")): "Morocco",
+}
+
+
+def wc2026_penalty_winner(home: str, away: str) -> Optional[str]:
+    """Return the known WC 2026 shootout winner for a tied knockout, if any."""
+    key = frozenset((harmonize_country(home), harmonize_country(away)))
+    winner = WC2026_PENALTY_WINNERS.get(key)
+    return harmonize_country(winner) if winner else None
+
+
 def harmonize_columns(df: pd.DataFrame, cols: Iterable[str]) -> pd.DataFrame:
     out = df.copy()
     for col in cols:
@@ -1221,6 +1237,13 @@ def parse_bool(value: object) -> bool:
     if pd.isna(value):
         return False
     return str(value).strip().lower() in {"true", "1", "yes", "y", "t"}
+
+
+def parse_neutral_flag(value: object, default: bool = True) -> bool:
+    """Parse the results.csv neutral flag, defaulting missing values to neutral."""
+    if pd.isna(value):
+        return bool(default)
+    return parse_bool(value)
 
 
 def _odds_key(date, home: str, away: str) -> Tuple[str, str, str]:
@@ -2285,6 +2308,28 @@ def group_for_match(home: str, away: str) -> Optional[str]:
         if home in teams and away in teams:
             return group
     return None
+
+
+def wc2026_stage_for_match(match_date) -> int:
+    """Map a 2026 World Cup fixture date onto the training stage code."""
+    date = pd.to_datetime(match_date, errors="coerce")
+    if pd.isna(date):
+        return WC2026_STAGE_TO_TRAIN["group"]
+    if date < pd.Timestamp("2026-06-28"):
+        return WC2026_STAGE_TO_TRAIN["group"]
+    if date <= pd.Timestamp("2026-07-03"):
+        return WC2026_STAGE_TO_TRAIN["round_of_32"]
+    if date <= pd.Timestamp("2026-07-07"):
+        return WC2026_STAGE_TO_TRAIN["round_of_16"]
+    if date <= pd.Timestamp("2026-07-11"):
+        return WC2026_STAGE_TO_TRAIN["quarterfinal"]
+    if date <= pd.Timestamp("2026-07-15"):
+        return WC2026_STAGE_TO_TRAIN["semifinal"]
+    if date == pd.Timestamp("2026-07-18"):
+        return WC2026_STAGE_TO_TRAIN["third_place"]
+    if date == pd.Timestamp("2026-07-19"):
+        return WC2026_STAGE_TO_TRAIN["final"]
+    return WC2026_STAGE_TO_TRAIN["group"]
 
 
 def apply_group_result(groups, group: str, home: str, away: str, home_score: int, away_score: int) -> None:
