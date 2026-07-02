@@ -4,11 +4,17 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 ## 2026 World Cup Prediction
 
-> **Prediction updated: July 02, 2026** (9 R32 matches complete, 7 remaining)
+> **Prediction updated: July 02, 2026** (10 R32 matches complete, 6 remaining)
 
-Two prediction approaches run in parallel:
-- **Pipeline** — LGBM+DC blend with isotonic calibration and WC knockout renormalization (production model)
-- **MC Sim** — 100K Monte Carlo simulations from the fitted Dixon-Coles scoreline grid (goal-level simulation with extra time + Elo-based penalty shootouts for knockouts)
+### Two Prediction Methods
+
+Every match is predicted using two independent approaches that run in parallel:
+
+**1. Pipeline (LGBM + DC Blend)** — The production model. LightGBM gradient-boosted trees (75 features) are blended with the Dixon-Coles Poisson goal model (75% DC / 25% LGBM for group stage, 50/50 for knockouts). The blend is then isotonic-calibrated on a chronological holdout, renormalized for knockouts (draws removed), and adjusted with WC-specific calibration buckets. This is the primary prediction.
+
+**2. MC Simulation (100K Monte Carlo)** — Samples 100,000 match outcomes from the fitted Dixon-Coles scoreline probability grid. Each simulation samples goals for both teams from the Poisson distribution parameterized by DC attack/defense strengths, applies the Dixon-Coles low-score correlation correction (rho), and for knockouts resolves draws via extra time (30% increased scoring rate) and penalty shootouts (Elo-based win probability, not 50/50). Produces scoreline distributions, goal market probabilities (BTTS, over/under), and win probabilities.
+
+**Why both?** The pipeline incorporates LGBM's pattern recognition (form, streaks, momentum) on top of the DC goal model, while the MC simulation gives a pure goal-level view from the DC model alone. When both agree, confidence is high. When they diverge (e.g., Brazil vs Norway: Pipeline 74% vs MC 90.5%), the gap reflects LGBM pulling the DC estimate back toward features the goal model can't see.
 
 | Place | Team | Probability |
 |-------|------|-------------|
@@ -42,60 +48,60 @@ Two prediction approaches run in parallel:
 | Match | Home | Away | Pipeline Pred | Pipeline % | MC % | Result |
 |-------|------|------|---------------|-----------|------|--------|
 | M73 | South Africa | Canada | **Canada** | 67.6% | 81.2% | ✅ Canada 1-0 |
-| M74 | Germany | Paraguay | **Germany** | 66.1% | 53.7% | ❌ Paraguay wins on pens (1-1, 3-4) |
-| M75 | Netherlands | Morocco | **Netherlands** | 66.1% | 51.7% | ❌ Morocco wins on pens (1-1, 2-3) |
-| M76 | Brazil | Japan | **Brazil** | 74.0% | 81.7% | ✅ Brazil 2-1 |
-| M77 | France | Sweden | **France** | 74.0% | 80.8% | ✅ France 3-0 |
-| M78 | Côte d'Ivoire | Norway | **Norway** | 61.0% | 61.6% | ✅ Norway 2-1 |
+| M74 | Brazil | Japan | **Brazil** | 74.0% | 81.7% | ✅ Brazil 2-1 |
+| M75 | Germany | Paraguay | **Germany** | 66.1% | 53.7% | ❌ Paraguay wins on pens (1-1, 3-4) |
+| M76 | Netherlands | Morocco | **Netherlands** | 66.1% | 51.7% | ❌ Morocco wins on pens (1-1, 2-3) |
+| M77 | Côte d'Ivoire | Norway | **Norway** | 61.0% | 61.6% | ✅ Norway 2-1 |
+| M78 | France | Sweden | **France** | 74.0% | 80.8% | ✅ France 3-0 |
 | M79 | Mexico | Ecuador | **Ecuador** | 61.0% | 64.8% | ❌ Mexico 2-0 |
 | M80 | England | DR Congo | **England** | 90.8% | 89.0% | ✅ England 2-1 |
-| M81 | USA | Bosnia and Herzegovina | **USA** | 74.0% | 83.2% | *July 1* |
-| M82 | Belgium | Senegal | **Belgium** | 67.6% | 63.5% | ✅ Belgium 3-2 (a.e.t.) |
+| M81 | Belgium | Senegal | **Belgium** | 67.6% | 63.5% | ✅ Belgium 3-2 (a.e.t.) |
+| M82 | USA | Bosnia and Herzegovina | **USA** | 74.0% | 83.2% | ✅ USA 2-0 |
 | M83 | Portugal | Croatia | **Portugal** | 66.1% | 66.8% | *July 2* |
-| M84 | Spain | Austria | **Spain** | 74.0% | 81.7% | *July 2* |
+| M84 | Spain | Austria | **Spain** | 74.0% | 81.4% | *July 2* |
 | M85 | Switzerland | Algeria | **Switzerland** | 61.0% | 53.9% | *July 2* |
 | M86 | Argentina | Cape Verde | **Argentina** | 96.8% | 98.3% | *July 3* |
-| M87 | Colombia | Ghana | **Colombia** | 95.1% | 95.8% | *July 3* |
+| M87 | Colombia | Ghana | **Colombia** | 95.1% | 95.7% | *July 3* |
 | M88 | Australia | Egypt | **Australia** | 66.1% | 67.0% | *July 3* |
 
-**R32 accuracy: Pipeline 6/9 (67%) | MC Sim 6/9 (67%)** — both miss the same 3 matches (2 penalty shootouts + Mexico upset)
+**R32 accuracy: Pipeline 7/10 (70%) | MC Sim 7/10 (70%)** — both miss the same 3 matches (2 penalty shootouts + Mexico upset)
 
 ### Round of 16
 
 | Match | Home | Away | Pipeline Pred | Pipeline % | MC % |
 |-------|------|------|---------------|-----------|------|
 | M89 | Canada | Morocco | **Morocco** | 66.1% | 59.6% |
-| M90 | Paraguay | France | **France** | 67.6% | 62.8% |
-| M91 | Brazil | Norway | **Brazil** | 74.0% | 90.5% |
-| M92 | Mexico | England | **England** | 66.1% | 65.5% |
-| M93 | Portugal | Spain | **Spain** | 66.1% | 60.2% |
-| M94 | USA | Belgium | **Belgium** | 66.1% | 63.6% |
-| M95 | Argentina | Australia | **Argentina** | 74.0% | 87.8% |
+| M90 | Paraguay | France | **France** | 67.6% | 62.5% |
+| M91 | Brazil | Norway | **Brazil** | 74.0% | 90.6% |
+| M92 | Mexico | England | **England** | 66.1% | 65.9% |
+| M93 | Portugal | Spain | **Spain** | 66.1% | 60.1% |
+| M94 | USA | Belgium | **Belgium** | 66.1% | 63.5% |
+| M95 | Argentina | Australia | **Argentina** | 74.0% | 88.0% |
 | M96 | Switzerland | Colombia | **Colombia** | 67.6% | 82.4% |
 
 ### Quarterfinals
 
 | Match | Home | Away | Pipeline Pred | Pipeline % | MC % |
 |-------|------|------|---------------|-----------|------|
-| M97 | Morocco | France | **France** | 66.1% | 58.7% |
-| M98 | Spain | Belgium | **Spain** | 67.6% | 66.5% |
-| M99 | Brazil | England | **Brazil** | 66.1% | 73.1% |
-| M100 | Argentina | Colombia | **Argentina** | 66.1% | 66.7% |
+| M97 | Morocco | France | **France** | 66.1% | 58.9% |
+| M98 | Spain | Belgium | **Spain** | 67.6% | 66.3% |
+| M99 | Brazil | England | **Brazil** | 66.1% | 72.8% |
+| M100 | Argentina | Colombia | **Argentina** | 66.1% | 67.3% |
 
 ### Semifinals
 
 | Match | Home | Away | Pipeline Pred | Pipeline % | MC % |
 |-------|------|------|---------------|-----------|------|
-| M101 | France | Spain | **Spain** | 61.0% | 59.3% |
-| M102 | Brazil | Argentina | **Argentina** | 61.0% | 56.2% |
+| M101 | France | Spain | **Spain** | 61.0% | 59.7% |
+| M102 | Brazil | Argentina | **Argentina** | 61.0% | 56.0% |
 
 ### Third Place Match
 
-- France vs Brazil → **Brazil** (66.1%)
+- France vs Brazil → **Brazil** (Pipeline 66.1% | MC 72.8%)
 
 ### Final
 
-- Spain vs Argentina → **Argentina** (66.1%)
+- Spain vs Argentina → **Argentina** (Pipeline 66.1% | MC 56.0%)
 
 ### Path to the Final
 
@@ -112,65 +118,46 @@ The system uses a **blended ensemble** of two models:
 
 1. **Dixon-Coles Poisson Goal Model** (75% weight for group stage, 50% for knockouts) — models goals scored as Poisson distributions with team-specific attack/defense strengths and home advantage. Naturally produces realistic draw probabilities. Blend weight tuned on chronological holdout.
 
-2. **LightGBM Classifier** (25% weight for group stage, 50% for knockouts) — gradient-boosted trees trained on 60+ features per match, with isotonic calibration, draw class weighting (1.6×), and time-decay sample weights (half-life: 4 years). Hyperparameters tuned via Bayesian optimization (Hyperopt TPE, 100 trials). LightGBM selected over XGBoost after backtest comparison showed better log-loss calibration.
+2. **LightGBM Classifier** (25% weight for group stage, 50% for knockouts) — gradient-boosted trees trained on 75 features per match, with isotonic calibration, draw class weighting (1.6×), and time-decay sample weights (half-life: 4 years). Hyperparameters tuned via Bayesian optimization (Hyperopt TPE, 100 trials). LightGBM selected over XGBoost after backtest comparison showed better log-loss calibration.
 
-### Features (60+ total)
+### Monte Carlo Simulation
 
-**Team Strength (7):**
-- Elo rating (current), Elo difference, Elo sum
-- Pre-tournament Elo, FIFA rank, football power index, tradition
+In addition to the pipeline blend, every match is simulated 100,000 times using the fitted Dixon-Coles model:
 
-**Form & Momentum (10):**
-- Win/draw/loss rate (last 20 matches)
-- Avg goals scored/conceded (last 5 and 10 matches)
-- Elo momentum (change over last 5/10 matches, differential)
-- Attack/defense trend (recent 3 vs 10 match baseline)
+1. **Scoreline grid** — Build an 11×11 probability grid from Poisson PMFs for each team's expected goals (lambda), with Dixon-Coles low-score correction (rho) applied to 0-0, 0-1, 1-0, and 1-1 cells.
+2. **Sampling** — Draw 100K scorelines from the grid.
+3. **Knockout resolution** — For draws in knockout matches: sample extra-time goals (30% increased scoring rate for fatigue/open play), then resolve remaining draws via penalty shootout with Elo-based win probability (`1/(1+10^(-elo_diff/400))`).
+4. **Output** — Win probabilities (90-min and knockout), scoreline distribution, average goals, BTTS rate, over/under 2.5.
 
-**Form Score & Streaks (7):**
-- Form score (last 30 matches: win=+1, draw=0, loss=-1, summed)
-- Current win streak, opponent win streak, unbeaten streak, loss streak
-- Form score differential vs opponent
+The MC simulation is a pure goal-model view — it does not incorporate LGBM features (form, streaks, momentum). When it diverges from the pipeline, the gap reflects information the goal model can't see.
 
-**Clean Sheets & Scoring (4):**
-- Clean sheets in last 5/10 matches
-- Scoring rate (fraction of last 5 with at least 1 goal)
-- Conceding rate (fraction of last 5 with at least 1 goal conceded)
+### Features (75 total)
 
-**Goal Difference (3):**
-- Goal difference (last 5 and 10 matches)
-- Goal difference differential vs opponent
+**Team Strength (7):** Elo rating (current), Elo difference, Elo sum, Pre-tournament Elo, FIFA rank, football power index, tradition
 
-**Head-to-Head (5):**
-- H2H matches, win rate, draw rate (time-decayed, 15-year limit)
-- Avg goals for/against in H2H
+**Form & Momentum (10):** Win/draw/loss rate (last 20), Avg goals scored/conceded (last 5 and 10), Elo momentum (5/10, differential), Attack/defense trend
 
-**Opponent-Weighted Form (2):**
-- Form weighted by opponent Elo (beating Argentina > beating Haiti)
-- Differential vs opponent
+**Form Score & Streaks (7):** Form score (last 30: win=+1, draw=0, loss=-1), Win streak, opponent win streak, unbeaten streak, loss streak, form score differential
 
-**Squad Market Value (4):**
-- Team and opponent squad value (log-scaled EUR, from Transfermarkt)
-- Value difference and ratio
+**Clean Sheets & Scoring (4):** Clean sheets (5/10), scoring rate, conceding rate
 
-**Bookmaker Odds (4):**
-- Implied home/draw/away probabilities
-- Overround (bookmaker margin)
+**Goal Difference (3):** Goal difference (5/10), differential vs opponent
 
-**Draw Propensity (4):**
-- Elo parity (1 / (1 + |elo_diff| / 100))
-- Combined draw rate of both teams
-- Expected total goals, low-scoring indicator
+**Head-to-Head (5):** H2H matches, win rate, draw rate (time-decayed, 15yr), avg goals for/against
 
-**Fatigue (3):**
-- Matches in last 30/90 days, differential
+**Opponent-Weighted Form (2):** Form weighted by opponent Elo, differential
 
-**Context (7):**
-- Tournament stage, neutral venue, home advantage
-- Rest days, WC participations, titles, WC win rate
+**Squad Market Value (4):** Team and opponent squad value (log EUR), difference and ratio
 
-**Country Demographics (6):**
-- GDP per capita, population, life expectancy
-- Urbanization %, health spending % GDP, and others
+**Bookmaker Odds (4):** Implied home/draw/away probabilities, overround
+
+**Draw Propensity (4):** Elo parity, combined draw rate, expected total goals, low-scoring indicator
+
+**Fatigue (3):** Matches in last 30/90 days, differential
+
+**Context (7):** Tournament stage, neutral venue, home advantage, rest days, WC participations, titles, WC win rate
+
+**Country Demographics (6):** GDP per capita, population, life expectancy, urbanization, health spending
 
 ### Training Pipeline
 
@@ -183,11 +170,13 @@ The system uses a **blended ensemble** of two models:
 
 ### Knockout Stage Handling
 
-Knockout matches cannot end in a draw. The model:
+Knockout matches cannot end in a draw. The pipeline:
 1. Uses reduced Dixon-Coles weight (50% vs 75% in group stage) to avoid over-amplification
 2. Renormalizes: P(home | no draw) = P(home) / (P(home) + P(away))
 3. Applies WC-specific calibration buckets (not qualifier-dominated all-match calibration)
 4. Prints raw 3-way probabilities alongside renormalized ones for transparency
+
+The MC simulation handles knockouts differently: draws are played out via extra time (30% increased scoring) and penalty shootouts (Elo-weighted), producing a more realistic knockout probability that accounts for the draw→penalty pathway.
 
 ## Performance
 
@@ -216,15 +205,15 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 
 **Note:** WC knockout calibration is weaker than overall calibration. At 80-90% confidence on WC matches specifically, actual accuracy is ~57%. The model is aware of this and applies WC-specific calibration for knockout predictions.
 
-### 2026 WC Backtest (81 matches: 72 group + 9 R32)
+### 2026 WC Backtest (82 matches: 72 group + 10 R32)
 
 | Metric | Pipeline | MC Sim |
 |--------|---------|--------|
-| **Accuracy** | 63.0% (51/81) | 66.7% (6/9 KO only)* |
-| **Log-loss** | 0.8328 | 0.4689 (KO only)* |
-| **Brier score** | 0.1682 | — |
+| **Accuracy** | 63.4% (52/82) | 70.0% (7/10 KO only)* |
+| **Log-loss** | 0.8250 | 0.4351 (KO only)* |
+| **Brier score** | 0.1664 | — |
 
-*MC Sim backtest covers 9 R32 knockout matches only (group stage MC not backtested). On the same 9 R32 matches, Pipeline also gets 6/9 (66.7%) with log-loss 0.4597.
+*MC Sim backtest covers 10 R32 knockout matches only. On the same 10 R32 matches, Pipeline also gets 7/10 (70.0%) with log-loss 0.4351. Both approaches miss the same 3 matches: Germany-Paraguay (pens), Netherlands-Morocco (pens), Mexico-Ecuador (upset).
 
 ### Model Evolution
 
@@ -235,14 +224,14 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 | V3 (ensemble) | **64.5%** | **0.8858** | **0.1791** | Dixon-Coles, odds, calibration |
 | V4 (squad values) | 64.5% | 0.8897 | 0.1797 | +4 squad value features |
 | V5 (walk-forward) | 59.6% | **0.8795** | **0.1724** | 11,909-match validation |
-| V6 (LightGBM) | 63.0% | **0.8328** | **0.1682** | LightGBM, +15 features (form_score, streaks, clean_sheets, goal_diff), tradition dropped, R32 stage detection + neutral flag fix |
-| V7 (MC Sim) | 63.0% | **0.8328** | **0.1682** | Added Dixon-Coles Monte Carlo simulation (100K per match) as parallel prediction alongside pipeline |
+| V6 (LightGBM) | 63.0% | **0.8328** | **0.1682** | LightGBM, +15 features, tradition dropped, R32 stage detection + neutral flag fix |
+| V7 (MC Sim) | 63.4% | **0.8250** | **0.1664** | Added Dixon-Coles Monte Carlo simulation (100K per match) as parallel prediction alongside pipeline |
 
 ## Data Sources
 
 | Data | Source | Records | Coverage |
 |------|--------|---------|----------|
-| Match results | [martj42/international_results](https://github.com/martj42/international_results) | 49,477 | 1872–2026 |
+| Match results | [martj42/international_results](https://github.com/martj42/international_results) | 49,486 | 1872–2026 |
 | Bookmaker odds | [football-data.co.uk](https://football-data.co.uk) | 2,144 | 2014–2026 |
 | Squad values | [Transfermarkt](https://www.transfermarkt.com) via [dcaribou/transfermarkt-datasets](https://github.com/dcaribou/transfermarkt-datasets) | 169 team-years | 2014–2026 |
 | Country indicators | World Bank API | 83 variables | 1960–2024 |
@@ -251,11 +240,10 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 ## Project Structure
 
 ```
-├── shared.py                  # Centralized feature engineering, state, Elo, aliases
-├── predict_2026.py            # Main 2026 WC prediction pipeline
-├── backtest_2026_wc.py        # Walk-forward backtest on 2026 group matches
+├── shared.py                  # Centralized feature engineering, state, Elo, DC model, MC simulation
+├── predict_2026.py            # Main 2026 WC prediction pipeline (pipeline + MC output)
+├── backtest_2026_wc.py        # Walk-forward backtest on 2026 WC matches
 ├── backtest_walkforward.py    # Walk-forward backtest on ALL 2014+ matches
-├── backtest_walkforward_1998.py # Walk-forward backtest on ALL 1998+ matches
 ├── explain_match.py           # SHAP-based match explanation engine
 ├── monte_carlo_2026.py        # Monte Carlo tournament simulation (10K runs)
 ├── feature_selection.py       # Permutation importance feature selection
@@ -268,7 +256,7 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 ├── analysis.py                # Exploratory analysis
 │
 ├── data/
-│   ├── results.csv            # 49,477 match results (1872-2026)
+│   ├── results.csv            # 49,486 match results (1872-2026)
 │   ├── betting_odds.csv       # 2,144 matches with bookmaker odds
 │   ├── squad_values.csv       # 169 team-years of Transfermarkt values
 │   ├── goalscorers.csv        # Goal-level data
@@ -291,10 +279,10 @@ curl -o data/results.csv https://raw.githubusercontent.com/martj42/international
 curl -o data/goalscorers.csv https://raw.githubusercontent.com/martj42/international_results/master/goalscorers.csv
 curl -o data/shootouts.csv https://raw.githubusercontent.com/martj42/international_results/master/shootouts.csv
 
-# Run predictions
+# Run predictions (outputs both Pipeline and MC Sim for every match)
 python3 predict_2026.py              # Full bracket prediction (LightGBM, no tradition)
 python3 predict_2026.py --model xgb  # Use XGBoost instead
-python3 predict_2026.py --exclude-tradition False  # Include tradition features
+python3 predict_2026.py --debug      # Show LGBM/DC component probabilities
 python3 backtest_2026_wc.py          # Walk-forward backtest (2026 matches)
 python3 backtest_2026_wc.py --compare # Compare XGBoost vs LightGBM variants
 python3 backtest_walkforward.py      # Walk-forward backtest (all 2014+ matches)
