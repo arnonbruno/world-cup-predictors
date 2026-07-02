@@ -120,6 +120,7 @@ def build_training_matrix(results_df, country_history, odds=None, squad_values=N
     df["date"] = pd.to_datetime(df["date"])
     df = df[~((df["date"].dt.year == 2026) & (df["tournament"] == "FIFA World Cup"))]
     df = df.sort_values("date").reset_index(drop=True)
+    poisson_model = fit_dixon_coles(df, exclude_2026_wc=False)
 
     state = make_initial_state()
     rows, labels, feature_dates = [], [], []
@@ -153,7 +154,7 @@ def build_training_matrix(results_df, country_history, odds=None, squad_values=N
         rows.append(compute_match_features(
             ht, at, state, country_feature_cache[feature_year], stage, r["date"],
             neutral=neutral, is_home=is_home, odds_row=odds_row,
-            squad_values=squad_values,
+            squad_values=squad_values, poisson_model=poisson_model,
         ))
         labels.append(0 if hs > aw else (1 if hs == aw else 2))
         feature_dates.append(r["date"])
@@ -172,7 +173,7 @@ def build_training_matrix(results_df, country_history, odds=None, squad_values=N
 
     X = finalize_feature_frame(rows)
     y = np.array(labels)
-    return X, y, feature_dates, match_meta, state
+    return X, y, feature_dates, match_meta, state, poisson_model
 
 
 def train_model(
@@ -185,7 +186,7 @@ def train_model(
 ):
     """Train GBT + Dixon-Coles on all pre-2026-WC matches."""
     config = config or BacktestConfig()
-    X, y, feature_dates, match_meta, state = build_training_matrix(
+    X, y, feature_dates, match_meta, state, poisson_model = build_training_matrix(
         results_df, country_history, odds=odds, squad_values=squad_values,
     )
     if config.exclude_tradition:
@@ -204,8 +205,7 @@ def train_model(
         label=gbt_label,
     )
 
-    print("  Fitting Dixon-Coles Poisson goal model...")
-    poisson_model = fit_dixon_coles(results_df)
+    print("  Using Dixon-Coles Poisson goal model for features and blending...")
     order = pd.Series(pd.to_datetime(feature_dates, errors="coerce")).sort_values().index
     split = max(1, int(len(order) * 0.8))
     val_idx = order[split:]
@@ -233,7 +233,7 @@ def predict_match(model, feature_names, home, away, state, cf, stage, date,
     odds_row = odds_features_for_match(odds, date, home, away)
     feat = compute_match_features(home, away, state, cf, stage, date,
                                   neutral=neutral, is_home=is_home, odds_row=odds_row,
-                                  squad_values=squad_values)
+                                  squad_values=squad_values, poisson_model=poisson_model)
     X = prepare_prediction_frame(feat, feature_names)
     probs = np.asarray(model.predict_proba(X)[0], dtype=float)
 
@@ -490,7 +490,7 @@ def run_comparison(hyperopt_trials: int = 100) -> pd.DataFrame:
     odds = load_betting_odds()
     squad_values = load_squad_values()
 
-    X, y, feature_dates, _, _ = build_training_matrix(
+    X, y, feature_dates, _, _, _ = build_training_matrix(
         results_df, country_history, odds=odds, squad_values=squad_values,
     )
     run_tradition_analysis(X, y, feature_dates)

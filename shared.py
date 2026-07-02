@@ -112,6 +112,15 @@ SQUAD_VALUE_FEATURE_COLUMNS = [
     "squad_value_ratio",
 ]
 
+DIXON_COLES_FEATURE_COLUMNS = [
+    "dc_p_home",
+    "dc_p_draw",
+    "dc_p_away",
+    "dc_lambda_home",
+    "dc_lambda_away",
+    "dc_log_likelihood",
+]
+
 # World Cup editions for which Transfermarkt squad values are available. Lookups
 # use the most recent edition at or before the match year (a "year lag"), so a
 # 2023 friendly is valued with the 2022 squad and a 2026 fixture with 2026 values.
@@ -1024,7 +1033,7 @@ def _weighted_h2h_record(record: dict, match_date) -> dict:
     return weighted
 
 
-def compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False, odds_row=None, squad_values=None):
+def compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False, odds_row=None, squad_values=None, poisson_model=None):
     s, o = state[team], state[opponent]
     form = s["form"][-10:] if s["form"] else [0.5]
     opp_form = o["form"][-10:] if o["form"] else [0.5]
@@ -1122,7 +1131,7 @@ def compute_match_features(team, opponent, state, country_features, stage_num, m
         squad_value_diff = np.nan
         squad_value_ratio = np.nan
 
-    return {
+    features = {
         "elo": s["elo"], "elo_opponent": o["elo"],
         "elo_diff": elo_diff, "elo_sum": s["elo"] + o["elo"],
         "form_win_rate": form_win_rate,
@@ -1194,6 +1203,24 @@ def compute_match_features(team, opponent, state, country_features, stage_num, m
         "squad_value_ratio": squad_value_ratio,
     }
 
+    if poisson_model is not None:
+        dc_probs = np.asarray(poisson_model.outcome_probs(team, opponent, neutral=neutral), dtype=float)
+        dc_probs = np.clip(dc_probs, 1e-12, 1.0)
+        dc_probs = dc_probs / dc_probs.sum()
+        dc_lambda_home, dc_lambda_away = poisson_model._lambdas(team, opponent, neutral=neutral)
+        features.update({
+            "dc_p_home": float(dc_probs[0]),
+            "dc_p_draw": float(dc_probs[1]),
+            "dc_p_away": float(dc_probs[2]),
+            "dc_lambda_home": float(dc_lambda_home),
+            "dc_lambda_away": float(dc_lambda_away),
+            # Expected 3-way log score under the DC distribution; closer to 0 means
+            # the DC model sees a more decisive matchup.
+            "dc_log_likelihood": float(np.sum(dc_probs * np.log(dc_probs))),
+        })
+
+    return features
+
 
 def finalize_feature_frame(rows: Sequence[dict]) -> pd.DataFrame:
     """Turn feature dicts into a model-ready frame.
@@ -1206,7 +1233,7 @@ def finalize_feature_frame(rows: Sequence[dict]) -> pd.DataFrame:
     convention (see ``prepare_prediction_frame``).
     """
     X = pd.DataFrame(rows)
-    keep_nan = set(ODDS_FEATURE_COLUMNS) | set(SQUAD_VALUE_FEATURE_COLUMNS)
+    keep_nan = set(ODDS_FEATURE_COLUMNS) | set(SQUAD_VALUE_FEATURE_COLUMNS) | set(DIXON_COLES_FEATURE_COLUMNS)
     non_nan = [c for c in X.columns if c not in keep_nan]
     if non_nan:
         X[non_nan] = X[non_nan].fillna(0)
@@ -1224,7 +1251,7 @@ def prepare_prediction_frame(feat: dict, feature_names: Sequence[str]) -> pd.Dat
         if name not in X.columns:
             X[name] = np.nan
     X = X[list(feature_names)]
-    keep_nan = set(ODDS_FEATURE_COLUMNS) | set(SQUAD_VALUE_FEATURE_COLUMNS)
+    keep_nan = set(ODDS_FEATURE_COLUMNS) | set(SQUAD_VALUE_FEATURE_COLUMNS) | set(DIXON_COLES_FEATURE_COLUMNS)
     non_nan = [c for c in X.columns if c not in keep_nan]
     if non_nan:
         X[non_nan] = X[non_nan].fillna(0)
