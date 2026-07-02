@@ -94,8 +94,8 @@ class PredictionDetails:
     calibration_note: str = ""
 
 
-def compute_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False, odds_row=None, squad_values=None, poisson_model=None):
-    return compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral, is_home, odds_row, squad_values, poisson_model)
+def compute_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False, odds_row=None, squad_values=None):
+    return compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral, is_home, odds_row, squad_values)
 
 def _tune_blend_alpha(model, poisson_model, X_val, y_val, val_meta):
     from sklearn.metrics import log_loss as _ll
@@ -134,7 +134,6 @@ def train_model_bundle(
     if exclude_2026_wc:
         df = df[~((df['date'].dt.year == 2026) & (df['tournament'] == 'FIFA World Cup'))]
     df = df.sort_values('date').reset_index(drop=True)
-    poisson_model = fit_dixon_coles(df, exclude_2026_wc=False)
     
     state = defaultdict(make_team_state)
     
@@ -160,7 +159,7 @@ def train_model_bundle(
         stage = wc_stage_by_index.get(int(r.name), 0) if is_world_cup else 0
         neutral = parse_neutral_flag(r.get('neutral', True))
         odds_row = odds_features_for_match(odds, r['date'], ht, at)
-        rows.append(compute_features(ht, at, state, country_feature_cache[feature_year], stage, r['date'], neutral, not neutral, odds_row, squad_values, poisson_model))
+        rows.append(compute_features(ht, at, state, country_feature_cache[feature_year], stage, r['date'], neutral, not neutral, odds_row, squad_values))
         labels.append(0 if hs > aw else (1 if hs == aw else 2))
         feature_dates.append(r['date'])
         match_meta.append((ht, at, neutral))
@@ -195,6 +194,7 @@ def train_model_bundle(
     )
     print(f"  Trained {gbt_label} on {len(X)} matches")
 
+    poisson_model = fit_dixon_coles(results_df)
     order = pd.Series(pd.to_datetime(feature_dates, errors="coerce")).sort_values().index
     split = max(1, int(len(order) * 0.8))
     val_idx = order[split:]
@@ -277,7 +277,7 @@ def _odds_missing(odds_row: dict) -> bool:
 def predict_with_details(model, fl, ta, tb, state, cf, stage, date, neutral=True, is_home=False):
     ha, hb = harmonize(ta), harmonize(tb)
     odds_row = odds_features_for_match(_ODDS, date, ha, hb)
-    feat = compute_features(ha, hb, state, cf, stage, date, neutral, is_home, odds_row, _SQUAD_VALUES, _POISSON)
+    feat = compute_features(ha, hb, state, cf, stage, date, neutral, is_home, odds_row, _SQUAD_VALUES)
     X = prepare_prediction_frame(feat, fl)
     p_xgb = np.asarray(model.predict_proba(X)[0], dtype=float)
     probs = p_xgb.copy()
