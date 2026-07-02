@@ -94,8 +94,8 @@ class PredictionDetails:
     calibration_note: str = ""
 
 
-def compute_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False, odds_row=None, squad_values=None):
-    return compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral, is_home, odds_row, squad_values)
+def compute_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False, odds_row=None, squad_values=None, city=None):
+    return compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral, is_home, odds_row, squad_values, city=city)
 
 def _tune_blend_alpha(model, poisson_model, X_val, y_val, val_meta):
     from sklearn.metrics import log_loss as _ll
@@ -159,7 +159,9 @@ def train_model_bundle(
         stage = wc_stage_by_index.get(int(r.name), 0) if is_world_cup else 0
         neutral = parse_neutral_flag(r.get('neutral', True))
         odds_row = odds_features_for_match(odds, r['date'], ht, at)
-        rows.append(compute_features(ht, at, state, country_feature_cache[feature_year], stage, r['date'], neutral, not neutral, odds_row, squad_values))
+        city = r.get('city') if pd.notna(r.get('city')) else None
+        is_competitive = str(r.get('tournament', '')).lower() not in ('friendly', 'match')
+        rows.append(compute_features(ht, at, state, country_feature_cache[feature_year], stage, r['date'], neutral, not neutral, odds_row, squad_values, city=city))
         labels.append(0 if hs > aw else (1 if hs == aw else 2))
         feature_dates.append(r['date'])
         match_meta.append((ht, at, neutral))
@@ -170,7 +172,8 @@ def train_model_bundle(
             active_wc_teams.update([ht, at])
 
         apply_match_to_state(state, ht, at, hs, aw, r['date'],
-                             neutral=neutral, is_world_cup=is_world_cup)
+                             neutral=neutral, is_world_cup=is_world_cup,
+                             city=city, is_competitive=is_competitive)
 
     if active_wc_year is not None:
         finalize_world_cup_history(state, active_wc_year, active_wc_teams)
@@ -253,7 +256,8 @@ def prepare_2026_state(results, state):
     completed = wc26[wc26['home_score'].notna() & wc26['away_score'].notna()].sort_values('date')
     for _, r in completed.iterrows():
         neutral = parse_neutral_flag(r.get('neutral', True))
-        update_state(state, r['home_team'], r['away_team'], int(r['home_score']), int(r['away_score']), r['date'], neutral=neutral)
+        city = r.get('city') if pd.notna(r.get('city')) else None
+        update_state(state, r['home_team'], r['away_team'], int(r['home_score']), int(r['away_score']), r['date'], neutral=neutral, city=city)
     for teams in GROUP_2026_TEAMS.values():
         for team in teams:
             state[harmonize(team)]['wc_participations'] += 1
@@ -262,9 +266,10 @@ def prepare_2026_state(results, state):
 def load_country_features():
     return country_features_for_year(load_country_feature_history(), 2026)
 
-def update_state(state, ta, tb, sa, sb, date, neutral=True):
+def update_state(state, ta, tb, sa, sb, date, neutral=True, city=None):
     # All 2026 fixtures handled here are World Cup matches.
-    apply_match_to_state(state, ta, tb, sa, sb, date, neutral=neutral, is_world_cup=True)
+    apply_match_to_state(state, ta, tb, sa, sb, date, neutral=neutral, is_world_cup=True,
+                         city=city, is_competitive=True)
 
 def _alpha_for_stage(stage: int) -> float:
     return KNOCKOUT_ALPHA if stage > 0 else _ALPHA
@@ -274,10 +279,10 @@ def _odds_missing(odds_row: dict) -> bool:
     return any(not np.isfinite(float(odds_row.get(col, np.nan))) for col in ODDS_FEATURE_COLUMNS)
 
 
-def predict_with_details(model, fl, ta, tb, state, cf, stage, date, neutral=True, is_home=False):
+def predict_with_details(model, fl, ta, tb, state, cf, stage, date, neutral=True, is_home=False, city=None):
     ha, hb = harmonize(ta), harmonize(tb)
     odds_row = odds_features_for_match(_ODDS, date, ha, hb)
-    feat = compute_features(ha, hb, state, cf, stage, date, neutral, is_home, odds_row, _SQUAD_VALUES)
+    feat = compute_features(ha, hb, state, cf, stage, date, neutral, is_home, odds_row, _SQUAD_VALUES, city=city)
     X = prepare_prediction_frame(feat, fl)
     p_xgb = np.asarray(model.predict_proba(X)[0], dtype=float)
     probs = p_xgb.copy()

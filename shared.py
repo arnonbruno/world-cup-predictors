@@ -112,6 +112,79 @@ SQUAD_VALUE_FEATURE_COLUMNS = [
     "squad_value_ratio",
 ]
 
+# ── SOTA venue features (altitude + travel distance) ──────────────────────────
+# Altitude matters: Mexico City (2,240m) and Zapopan/Guadalajara (1,566m) cause
+# real cardiovascular strain for unacclimatized teams. Travel distance captures
+# jet-lag and fatigue not covered by match-count fatigue features.
+# Coordinates are (lat, lon, altitude_meters). WC 2026 venues are exact; other
+# major cities are approximate. Unknown cities default to (0, 0, 0).
+VENUE_COORDS = {
+    # WC 2026 venues (exact)
+    "Mexico City": (19.332, -99.248, 2240),
+    "Zapopan": (20.717, -103.400, 1566),  # Guadalajara metro
+    "Arlington": (32.760, -97.106, 185),
+    "Atlanta": (33.755, -84.401, 313),
+    "East Rutherford": (40.813, -74.074, 9),
+    "Foxborough": (42.064, -71.265, 26),
+    "Guadalupe": (25.680, -100.256, 537),  # Monterrey metro
+    "Houston": (29.685, -95.411, 30),
+    "Inglewood": (33.953, -118.339, 36),
+    "Kansas City": (39.049, -94.484, 272),
+    "Miami Gardens": (25.958, -80.239, 2),
+    "Philadelphia": (39.901, -75.167, 12),
+    "Santa Clara": (37.403, -121.970, 4),
+    "Seattle": (47.595, -122.332, 52),
+    "Toronto": (43.642, -79.389, 81),
+    "Vancouver": (49.218, -123.109, 5),
+    # Major historical cities (approximate, for non-WC backtest matches)
+    "London": (51.507, -0.128, 11),
+    "Paris": (48.856, 2.352, 35),
+    "Berlin": (52.520, 13.405, 34),
+    "Madrid": (40.417, -3.704, 667),
+    "Rome": (41.903, 12.496, 21),
+    "Buenos Aires": (-34.604, -58.382, 25),
+    "Rio de Janeiro": (-22.907, -43.173, 2),
+    "Sao Paulo": (-23.550, -46.633, 760),
+    "Brasilia": (-15.794, -47.883, 1172),
+    "Tokyo": (35.676, 139.650, 40),
+    "Seoul": (37.566, 126.978, 38),
+    "Moscow": (55.755, 37.617, 156),
+    "Cairo": (30.044, 31.235, 23),
+    "Lagos": (6.524, 3.379, 41),
+    "Sydney": (-33.868, 151.207, 58),
+    "Los Angeles": (34.052, -118.244, 93),
+    "New York": (40.713, -74.006, 10),
+    "Chicago": (41.878, -87.630, 181),
+    "Washington": (38.907, -77.037, 22),
+    "Lisbon": (38.722, -9.139, 57),
+    "Amsterdam": (52.370, 4.890, 2),
+    "Vienna": (48.208, 16.373, 171),
+    "Zurich": (47.377, 8.541, 408),
+    "Bogota": (4.711, -74.072, 2640),
+    "Quito": (-0.180, -78.468, 2850),
+    "La Paz": (-16.500, -68.150, 3640),
+    "Johannesburg": (-26.204, 28.047, 1753),
+}
+
+VENUE_FEATURE_COLUMNS = [
+    "venue_altitude",
+    "opp_venue_altitude",
+    "altitude_diff",
+    "high_altitude_indicator",
+    "travel_distance_km",
+    "opp_travel_distance_km",
+    "travel_diff",
+]
+
+# Features for form against similar-strength opponents and competitive/friendly split.
+FORM_CONTEXT_FEATURE_COLUMNS = [
+    "form_vs_similar_win_rate",
+    "form_vs_similar_diff",
+    "competitive_form_win_rate",
+    "friendly_form_win_rate",
+    "competitive_form_diff",
+]
+
 # World Cup editions for which Transfermarkt squad values are available. Lookups
 # use the most recent edition at or before the match year (a "year lag"), so a
 # 2023 friendly is valued with the 2022 squad and a 2026 fixture with 2026 values.
@@ -806,6 +879,12 @@ def make_team_state() -> Dict[str, object]:
         "wc_titles": 0,
         "wc_wins": 0,
         "wc_matches": 0,
+        # SOTA: venue + form-context tracking.
+        "last_city": None,          # city of the team's previous match
+        "form_results": [],         # full form list (1/0.5/0) for similar-Elo filtering
+        "form_opp_elos": [],        # opponent Elo for each form entry (parallel)
+        "form_competitive": [],     # form in competitive matches (qualifiers, tournaments)
+        "form_friendly": [],        # form in friendlies
     }
 
 
@@ -824,6 +903,8 @@ def update_team_state(
     *,
     neutral: bool = True,
     is_world_cup: bool = False,
+    city: str | None = None,
+    is_competitive: bool = False,
 ) -> None:
     """Apply one match result to ONE team's rolling state.
 
@@ -843,6 +924,16 @@ def update_team_state(
     s["opp_elo"] = _trim(s["opp_elo"] + [opp_elo_before])
     s["match_dates"] = _trim(s["match_dates"] + [match_date])
     s["last_match"] = match_date
+
+    # SOTA: track venue + form context for new features.
+    s["form_results"] = _trim(s["form_results"] + [result])
+    s["form_opp_elos"] = _trim(s["form_opp_elos"] + [opp_elo_before])
+    if is_competitive:
+        s["form_competitive"] = _trim(s["form_competitive"] + [result])
+    else:
+        s["form_friendly"] = _trim(s["form_friendly"] + [result])
+    if city:
+        s["last_city"] = city
 
     # H2H (always keyed by the sorted pair so lookups are symmetric).
     key = tuple(sorted([team, opponent]))
@@ -879,6 +970,8 @@ def apply_match_to_state(
     *,
     neutral: bool = True,
     is_world_cup: bool = False,
+    city: str | None = None,
+    is_competitive: bool = False,
 ) -> None:
     """Apply a full match (both sides + Elo) to the shared rolling state.
 
@@ -890,9 +983,11 @@ def apply_match_to_state(
     pre_home, pre_away = state[home]["elo"], state[away]["elo"]
 
     update_team_state(state, home, away, home_score, away_score, match_date,
-                      neutral=neutral, is_world_cup=is_world_cup)
+                      neutral=neutral, is_world_cup=is_world_cup,
+                      city=city, is_competitive=is_competitive)
     update_team_state(state, away, home, away_score, home_score, match_date,
-                      neutral=neutral, is_world_cup=is_world_cup)
+                      neutral=neutral, is_world_cup=is_world_cup,
+                      city=city, is_competitive=is_competitive)
 
     new_home, new_away = update_elo(pre_home, pre_away, home_score, away_score, neutral)
     state[home]["elo"] = new_home
@@ -949,6 +1044,52 @@ def _unbeaten_streak(form) -> int:
         else:
             break
     return streak
+
+
+# ── SOTA venue + form-context helpers ────────────────────────────────────────
+
+def _venue_lookup(city: str | None) -> tuple[float, float, float]:
+    """Return (lat, lon, altitude_m) for a city, or (0, 0, 0) if unknown."""
+    if not city or city not in VENUE_COORDS:
+        return (0.0, 0.0, 0.0)
+    return VENUE_COORDS[city]
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in km between two lat/lon points."""
+    if lat1 == 0 and lon1 == 0 and lat2 == 0 and lon2 == 0:
+        return 0.0
+    r = 6371.0  # Earth radius in km
+    p1 = np.radians(lat1)
+    p2 = np.radians(lat2)
+    dp = np.radians(lat2 - lat1)
+    dl = np.radians(lon2 - lon1)
+    a = np.sin(dp / 2) ** 2 + np.cos(p1) * np.cos(p2) * np.sin(dl / 2) ** 2
+    return 2 * r * np.arcsin(np.sqrt(a))
+
+
+def _form_vs_similar_elo(state_entry, current_opp_elo: float, window: int = 20,
+                         band: float = 100.0) -> float:
+    """Win rate against opponents within ±band Elo of the current opponent.
+
+    Uses the parallel ``form_results`` / ``form_opp_elos`` lists (both trimmed to
+    FORM_WINDOW=20). Returns 0.5 (prior) when no similar-strength matches exist.
+    """
+    results = state_entry.get("form_results", [])
+    opp_elos = state_entry.get("form_opp_elos", [])
+    if not results or not opp_elos:
+        return 0.5
+    wins = 0
+    count = 0
+    for res, oelo in zip(reversed(results), reversed(opp_elos)):
+        if abs(oelo - current_opp_elo) <= band:
+            wins += 1 if res == 1 else 0
+            count += 1
+        if count >= window:
+            break
+    if count == 0:
+        return 0.5
+    return wins / count
 
 
 def _opp_weighted_form(state_entry) -> float:
@@ -1024,7 +1165,7 @@ def _weighted_h2h_record(record: dict, match_date) -> dict:
     return weighted
 
 
-def compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False, odds_row=None, squad_values=None):
+def compute_match_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False, odds_row=None, squad_values=None, city=None):
     s, o = state[team], state[opponent]
     form = s["form"][-10:] if s["form"] else [0.5]
     opp_form = o["form"][-10:] if o["form"] else [0.5]
@@ -1122,6 +1263,55 @@ def compute_match_features(team, opponent, state, country_features, stage_num, m
         squad_value_diff = np.nan
         squad_value_ratio = np.nan
 
+    # ── SOTA venue features (altitude + travel distance) ──
+    cur_lat, cur_lon, cur_alt = _venue_lookup(city)
+    venue_altitude = float(cur_alt)
+    opp_venue_altitude = venue_altitude  # same venue for both teams in a match
+    altitude_diff = 0.0  # same venue → no diff; kept for schema consistency
+    high_altitude_indicator = 1 if cur_alt >= 1500 else 0
+
+    # Travel distance from each team's previous match venue.
+    prev_city_team = s.get("last_city")
+    prev_city_opp = o.get("last_city")
+    _, _, prev_alt_team = _venue_lookup(prev_city_team) if prev_city_team else (0, 0, 0)
+    _, _, prev_alt_opp = _venue_lookup(prev_city_opp) if prev_city_opp else (0, 0, 0)
+    if prev_city_team:
+        plat, plon, _ = _venue_lookup(prev_city_team)
+        travel_distance_km = _haversine_km(plat, plon, cur_lat, cur_lon)
+    else:
+        travel_distance_km = 0.0
+    if prev_city_opp:
+        plat, plon, _ = _venue_lookup(prev_city_opp)
+        opp_travel_distance_km = _haversine_km(plat, plon, cur_lat, cur_lon)
+    else:
+        opp_travel_distance_km = 0.0
+    travel_diff = float(travel_distance_km - opp_travel_distance_km)
+
+    # ── SOTA form-context features ──
+    # Form against opponents within ±100 Elo of current opponent.
+    form_vs_similar_win_rate = _form_vs_similar_elo(s, o["elo"])
+    opp_form_vs_similar_win_rate = _form_vs_similar_elo(o, s["elo"])
+    form_vs_similar_diff = form_vs_similar_win_rate - opp_form_vs_similar_win_rate
+
+    # Competitive vs friendly form split.
+    comp_form = s.get("form_competitive", [])
+    friend_form = s.get("form_friendly", [])
+    opp_comp_form = o.get("form_competitive", [])
+    opp_friend_form = o.get("form_friendly", [])
+    competitive_form_win_rate = (
+        sum(1 for f in comp_form[-20:] if f == 1) / max(len(comp_form[-20:]), 1)
+        if comp_form else 0.5
+    )
+    friendly_form_win_rate = (
+        sum(1 for f in friend_form[-20:] if f == 1) / max(len(friend_form[-20:]), 1)
+        if friend_form else 0.5
+    )
+    opp_competitive_form_win_rate = (
+        sum(1 for f in opp_comp_form[-20:] if f == 1) / max(len(opp_comp_form[-20:]), 1)
+        if opp_comp_form else 0.5
+    )
+    competitive_form_diff = competitive_form_win_rate - opp_competitive_form_win_rate
+
     return {
         "elo": s["elo"], "elo_opponent": o["elo"],
         "elo_diff": elo_diff, "elo_sum": s["elo"] + o["elo"],
@@ -1192,6 +1382,20 @@ def compute_match_features(team, opponent, state, country_features, stage_num, m
         "opp_squad_value": opp_squad_value,
         "squad_value_diff": squad_value_diff,
         "squad_value_ratio": squad_value_ratio,
+        # ── SOTA venue features (altitude + travel distance) ──
+        "venue_altitude": venue_altitude,
+        "opp_venue_altitude": opp_venue_altitude,
+        "altitude_diff": altitude_diff,
+        "high_altitude_indicator": high_altitude_indicator,
+        "travel_distance_km": travel_distance_km,
+        "opp_travel_distance_km": opp_travel_distance_km,
+        "travel_diff": travel_diff,
+        # ── SOTA form-context features ──
+        "form_vs_similar_win_rate": form_vs_similar_win_rate,
+        "form_vs_similar_diff": form_vs_similar_diff,
+        "competitive_form_win_rate": competitive_form_win_rate,
+        "friendly_form_win_rate": friendly_form_win_rate,
+        "competitive_form_diff": competitive_form_diff,
     }
 
 
@@ -1206,7 +1410,7 @@ def finalize_feature_frame(rows: Sequence[dict]) -> pd.DataFrame:
     convention (see ``prepare_prediction_frame``).
     """
     X = pd.DataFrame(rows)
-    keep_nan = set(ODDS_FEATURE_COLUMNS) | set(SQUAD_VALUE_FEATURE_COLUMNS)
+    keep_nan = set(ODDS_FEATURE_COLUMNS) | set(SQUAD_VALUE_FEATURE_COLUMNS) | set(VENUE_FEATURE_COLUMNS) | set(FORM_CONTEXT_FEATURE_COLUMNS)
     non_nan = [c for c in X.columns if c not in keep_nan]
     if non_nan:
         X[non_nan] = X[non_nan].fillna(0)
@@ -1224,7 +1428,7 @@ def prepare_prediction_frame(feat: dict, feature_names: Sequence[str]) -> pd.Dat
         if name not in X.columns:
             X[name] = np.nan
     X = X[list(feature_names)]
-    keep_nan = set(ODDS_FEATURE_COLUMNS) | set(SQUAD_VALUE_FEATURE_COLUMNS)
+    keep_nan = set(ODDS_FEATURE_COLUMNS) | set(SQUAD_VALUE_FEATURE_COLUMNS) | set(VENUE_FEATURE_COLUMNS) | set(FORM_CONTEXT_FEATURE_COLUMNS)
     non_nan = [c for c in X.columns if c not in keep_nan]
     if non_nan:
         X[non_nan] = X[non_nan].fillna(0)

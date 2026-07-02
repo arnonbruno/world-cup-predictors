@@ -150,10 +150,12 @@ def build_training_matrix(results_df, country_history, odds=None, squad_values=N
         is_home = not neutral
         stage = wc_stage_by_index.get(int(r.name), 0) if is_world_cup else 0
         odds_row = odds_features_for_match(odds, r["date"], ht, at)
+        city = r.get("city") if pd.notna(r.get("city")) else None
+        is_competitive = str(r.get("tournament", "")).lower() not in ("friendly", "match")
         rows.append(compute_match_features(
             ht, at, state, country_feature_cache[feature_year], stage, r["date"],
             neutral=neutral, is_home=is_home, odds_row=odds_row,
-            squad_values=squad_values,
+            squad_values=squad_values, city=city,
         ))
         labels.append(0 if hs > aw else (1 if hs == aw else 2))
         feature_dates.append(r["date"])
@@ -165,7 +167,8 @@ def build_training_matrix(results_df, country_history, odds=None, squad_values=N
             active_wc_teams.update([ht, at])
 
         apply_match_to_state(state, ht, at, hs, aw, r["date"],
-                             neutral=neutral, is_world_cup=is_world_cup)
+                             neutral=neutral, is_world_cup=is_world_cup,
+                             city=city, is_competitive=is_competitive)
 
     if active_wc_year is not None:
         finalize_world_cup_history(state, active_wc_year, active_wc_teams)
@@ -228,12 +231,12 @@ def prepare_2026_state(state, results_df):
 
 def predict_match(model, feature_names, home, away, state, cf, stage, date,
                   neutral=True, is_home=False, odds=None,
-                  poisson_model=None, alpha=1.0, squad_values=None):
+                  poisson_model=None, alpha=1.0, squad_values=None, city=None):
     """Predict a single match. Returns (predicted_label_idx, probs[3])."""
     odds_row = odds_features_for_match(odds, date, home, away)
     feat = compute_match_features(home, away, state, cf, stage, date,
                                   neutral=neutral, is_home=is_home, odds_row=odds_row,
-                                  squad_values=squad_values)
+                                  squad_values=squad_values, city=city)
     X = prepare_prediction_frame(feat, feature_names)
     probs = np.asarray(model.predict_proba(X)[0], dtype=float)
 
@@ -382,12 +385,13 @@ def run_backtest(config: BacktestConfig | None = None, *, verbose: bool = True) 
         stage = stage_from_tournament_round(r.get("tournament", ""), home, away, date=date)
         neutral = parse_neutral_flag(r.get("neutral", True))
         is_home = not neutral
+        city = r.get("city") if pd.notna(r.get("city")) else None
 
         predicted_idx, probs = predict_match(
             model, feature_names, home, away, state, cf, stage, date,
             neutral=neutral, is_home=is_home,
             odds=odds, poisson_model=poisson_model, alpha=alpha,
-            squad_values=squad_values,
+            squad_values=squad_values, city=city,
         )
         actual_idx = actual_result(hs, aw, home, away, stage)
         is_correct = predicted_idx == actual_idx
@@ -409,7 +413,8 @@ def run_backtest(config: BacktestConfig | None = None, *, verbose: bool = True) 
             "p_away": float(probs[2]),
         })
         apply_match_to_state(state, home, away, hs, aw, date,
-                             neutral=neutral, is_world_cup=True)
+                             neutral=neutral, is_world_cup=True,
+                             city=city, is_competitive=True)
 
     metrics = _compute_metrics(results)
     metrics.name = config.name
