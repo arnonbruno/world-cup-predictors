@@ -2171,6 +2171,98 @@ class DixonColesModel:
         p_draw = np.trace(grid)
         return np.array([p_home, p_draw, p_away])
 
+    def mc_simulate(self, home: str, away: str, neutral: bool = True,
+                    n_sims: int = 100_000, knockout: bool = False,
+                    elo_diff: float | None = None) -> dict:
+        """Monte Carlo simulation from the DC scoreline grid.
+
+        Returns dict with:
+          - p_home, p_draw, p_away (90-min probabilities)
+          - If knockout=True: p_home_ko, p_away_ko (draws resolved via ET + pens)
+          - avg_goals_home, avg_goals_away, avg_total
+          - top_scorelines: list of (score, prob)
+          - btts, over_25, over_15
+        """
+        lam, mu = self._lambdas(home, away, neutral)
+        rho = self.rho
+
+        # Build scoreline grid
+        max_goals = 10
+        from math import lgamma
+        i = np.arange(0, max_goals + 1)
+        log_fact = np.array([lgamma(k + 1) for k in i])
+        ph = np.exp(i * np.log(lam) - lam - log_fact)
+        pa = np.exp(i * np.log(mu) - mu - log_fact)
+        grid = np.outer(ph, pa)
+        for a in (0, 1):
+            for b in (0, 1):
+                grid[a, b] *= self._tau(a, b, lam, mu, rho)
+        grid = np.clip(grid, 0.0, None)
+        grid /= grid.sum()
+
+        # Sample from grid
+        flat = grid.flatten()
+        samples = np.random.choice(len(flat), size=n_sims, p=flat)
+        gh = samples // (max_goals + 1)
+        ga = samples % (max_goals + 1)
+
+        h_wins = gh > ga
+        a_wins = ga > gh
+        draws = gh == ga
+
+        p_home = h_wins.mean()
+        p_draw = draws.mean()
+        p_away = a_wins.mean()
+
+        result = {
+            "p_home": float(p_home),
+            "p_draw": float(p_draw),
+            "p_away": float(p_away),
+            "avg_goals_home": float(gh.mean()),
+            "avg_goals_away": float(ga.mean()),
+            "avg_total": float((gh + ga).mean()),
+            "btts": float(((gh > 0) & (ga > 0)).mean()),
+            "over_25": float(((gh + ga) > 2.5).mean()),
+            "over_15": float(((gh + ga) > 1.5).mean()),
+            "lambda_home": float(lam),
+            "lambda_away": float(mu),
+        }
+
+        # Top scorelines
+        from collections import Counter
+        sc = Counter(zip(gh.tolist(), ga.tolist()))
+        result["top_scorelines"] = [(f"{h}-{a}", c / n_sims) for (h, a), c in sc.most_common(10)]
+
+        if knockout:
+            # Extra time for draws
+            draw_mask = draws.copy()
+            et_h = np.random.poisson(lam * 1.3, n_sims)
+            et_a = np.random.poisson(mu * 1.3, n_sims)
+            tot_h = gh.copy()
+            tot_a = ga.copy()
+            tot_h[draw_mask] += et_h[draw_mask]
+            tot_a[draw_mask] += et_a[draw_mask]
+
+            et_h_wins = tot_h > tot_a
+            et_a_wins = tot_a > tot_h
+            still_draw = tot_h == tot_a
+
+            # Penalties with Elo-based probability
+            if elo_diff is not None:
+                pen_h_prob = 1 / (1 + 10 ** (-elo_diff / 400))
+            else:
+                pen_h_prob = 0.5
+            pen_h = np.random.random(n_sims) < pen_h_prob
+
+            ko_h = et_h_wins | (still_draw & pen_h)
+            ko_a = et_a_wins | (still_draw & ~pen_h)
+
+            result["p_home_ko"] = float(ko_h.mean())
+            result["p_away_ko"] = float(ko_a.mean())
+            result["pen_prob_home"] = float(pen_h_prob)
+
+        return result
+
 
 def fit_dixon_coles(
     results_df: pd.DataFrame,

@@ -4,7 +4,11 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 ## 2026 World Cup Prediction
 
-> **Prediction updated: July 01, 2026** (9 R32 matches complete, 7 remaining)
+> **Prediction updated: July 02, 2026** (9 R32 matches complete, 7 remaining)
+
+Two prediction approaches run in parallel:
+- **Pipeline** — LGBM+DC blend with isotonic calibration and WC knockout renormalization (production model)
+- **MC Sim** — 100K Monte Carlo simulations from the fitted Dixon-Coles scoreline grid (goal-level simulation with extra time + Elo-based penalty shootouts for knockouts)
 
 | Place | Team | Probability |
 |-------|------|-------------|
@@ -35,55 +39,55 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 ### Round of 32
 
-| Match | Home | Away | Prediction | Confidence | Result |
-|-------|------|------|------------|------------|--------|
-| M73 | South Africa | Canada | **Canada** | 67.6% | ✅ Canada 1-0 |
-| M74 | Germany | Paraguay | **Germany** | 66.1% | ❌ Paraguay wins on pens (1-1, 3-4) |
-| M75 | Netherlands | Morocco | **Netherlands** | 66.1% | ❌ Morocco wins on pens (1-1, 2-3) |
-| M76 | Brazil | Japan | **Brazil** | 74.0% | ✅ Brazil 2-1 |
-| M77 | France | Sweden | **France** | 74.0% | ✅ France 3-0 |
-| M78 | Côte d'Ivoire | Norway | **Norway** | 61.0% | ✅ Norway 2-1 |
-| M79 | Mexico | Ecuador | **Ecuador** | 61.0% | ❌ Mexico 2-0 |
-| M80 | England | DR Congo | **England** | 90.8% | ✅ England 2-1 |
-| M81 | USA | Bosnia and Herzegovina | **USA** | 74.0% | *July 1* |
-| M82 | Belgium | Senegal | **Belgium** | 67.6% | ✅ Belgium 3-2 (a.e.t.) |
-| M83 | Portugal | Croatia | **Portugal** | 66.1% | *July 2* |
-| M84 | Spain | Austria | **Spain** | 74.0% | *July 2* |
-| M85 | Switzerland | Algeria | **Switzerland** | 61.0% | *July 2* |
-| M86 | Argentina | Cape Verde | **Argentina** | 96.8% | *July 3* |
-| M87 | Colombia | Ghana | **Colombia** | 95.1% | *July 3* |
-| M88 | Australia | Egypt | **Australia** | 66.1% | *July 3* |
+| Match | Home | Away | Pipeline Pred | Pipeline % | MC % | Result |
+|-------|------|------|---------------|-----------|------|--------|
+| M73 | South Africa | Canada | **Canada** | 67.6% | 81.2% | ✅ Canada 1-0 |
+| M74 | Germany | Paraguay | **Germany** | 66.1% | 53.7% | ❌ Paraguay wins on pens (1-1, 3-4) |
+| M75 | Netherlands | Morocco | **Netherlands** | 66.1% | 51.7% | ❌ Morocco wins on pens (1-1, 2-3) |
+| M76 | Brazil | Japan | **Brazil** | 74.0% | 81.7% | ✅ Brazil 2-1 |
+| M77 | France | Sweden | **France** | 74.0% | 80.8% | ✅ France 3-0 |
+| M78 | Côte d'Ivoire | Norway | **Norway** | 61.0% | 61.6% | ✅ Norway 2-1 |
+| M79 | Mexico | Ecuador | **Ecuador** | 61.0% | 64.8% | ❌ Mexico 2-0 |
+| M80 | England | DR Congo | **England** | 90.8% | 89.0% | ✅ England 2-1 |
+| M81 | USA | Bosnia and Herzegovina | **USA** | 74.0% | 83.2% | *July 1* |
+| M82 | Belgium | Senegal | **Belgium** | 67.6% | 63.5% | ✅ Belgium 3-2 (a.e.t.) |
+| M83 | Portugal | Croatia | **Portugal** | 66.1% | 66.8% | *July 2* |
+| M84 | Spain | Austria | **Spain** | 74.0% | 81.7% | *July 2* |
+| M85 | Switzerland | Algeria | **Switzerland** | 61.0% | 53.9% | *July 2* |
+| M86 | Argentina | Cape Verde | **Argentina** | 96.8% | 98.3% | *July 3* |
+| M87 | Colombia | Ghana | **Colombia** | 95.1% | 95.8% | *July 3* |
+| M88 | Australia | Egypt | **Australia** | 66.1% | 67.0% | *July 3* |
 
-**R32 accuracy: 6/9 (67%)** — 3 upsets (2 penalty wins + Mexico over Ecuador)
+**R32 accuracy: Pipeline 6/9 (67%) | MC Sim 6/9 (67%)** — both miss the same 3 matches (2 penalty shootouts + Mexico upset)
 
 ### Round of 16
 
-| Match | Home | Away | Prediction | Confidence |
-|-------|------|------|------------|------------|
-| M89 | Canada | Morocco | **Morocco** | 66.1% |
-| M90 | Paraguay | France | **France** | 67.6% |
-| M91 | Brazil | Norway | **Brazil** | 74.0% |
-| M92 | Mexico | England | **England** | 66.1% |
-| M93 | Portugal | Spain | **Spain** | 66.1% |
-| M94 | USA | Belgium | **Belgium** | 66.1% |
-| M95 | Argentina | Australia | **Argentina** | 74.0% |
-| M96 | Switzerland | Colombia | **Colombia** | 67.6% |
+| Match | Home | Away | Pipeline Pred | Pipeline % | MC % |
+|-------|------|------|---------------|-----------|------|
+| M89 | Canada | Morocco | **Morocco** | 66.1% | 59.6% |
+| M90 | Paraguay | France | **France** | 67.6% | 62.8% |
+| M91 | Brazil | Norway | **Brazil** | 74.0% | 90.5% |
+| M92 | Mexico | England | **England** | 66.1% | 65.5% |
+| M93 | Portugal | Spain | **Spain** | 66.1% | 60.2% |
+| M94 | USA | Belgium | **Belgium** | 66.1% | 63.6% |
+| M95 | Argentina | Australia | **Argentina** | 74.0% | 87.8% |
+| M96 | Switzerland | Colombia | **Colombia** | 67.6% | 82.4% |
 
 ### Quarterfinals
 
-| Match | Home | Away | Prediction | Confidence |
-|-------|------|------|------------|------------|
-| M97 | Morocco | France | **France** | 66.1% |
-| M98 | Spain | Belgium | **Spain** | 67.6% |
-| M99 | Brazil | England | **Brazil** | 66.1% |
-| M100 | Argentina | Colombia | **Argentina** | 66.1% |
+| Match | Home | Away | Pipeline Pred | Pipeline % | MC % |
+|-------|------|------|---------------|-----------|------|
+| M97 | Morocco | France | **France** | 66.1% | 58.7% |
+| M98 | Spain | Belgium | **Spain** | 67.6% | 66.5% |
+| M99 | Brazil | England | **Brazil** | 66.1% | 73.1% |
+| M100 | Argentina | Colombia | **Argentina** | 66.1% | 66.7% |
 
 ### Semifinals
 
-| Match | Home | Away | Prediction | Confidence |
-|-------|------|------|------------|------------|
-| M101 | France | Spain | **Spain** | 61.0% |
-| M102 | Brazil | Argentina | **Argentina** | 61.0% |
+| Match | Home | Away | Pipeline Pred | Pipeline % | MC % |
+|-------|------|------|---------------|-----------|------|
+| M101 | France | Spain | **Spain** | 61.0% | 59.3% |
+| M102 | Brazil | Argentina | **Argentina** | 61.0% | 56.2% |
 
 ### Third Place Match
 
@@ -214,11 +218,13 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 
 ### 2026 WC Backtest (81 matches: 72 group + 9 R32)
 
-| Metric | Value |
-|--------|-------|
-| **Accuracy** | 63.0% (51/81) |
-| **Log-loss** | 0.8737 |
-| **Brier score** | 0.1747 |
+| Metric | Pipeline | MC Sim |
+|--------|---------|--------|
+| **Accuracy** | 63.0% (51/81) | 66.7% (6/9 KO only)* |
+| **Log-loss** | 0.8328 | 0.4689 (KO only)* |
+| **Brier score** | 0.1682 | — |
+
+*MC Sim backtest covers 9 R32 knockout matches only (group stage MC not backtested). On the same 9 R32 matches, Pipeline also gets 6/9 (66.7%) with log-loss 0.4597.
 
 ### Model Evolution
 
@@ -229,7 +235,8 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 | V3 (ensemble) | **64.5%** | **0.8858** | **0.1791** | Dixon-Coles, odds, calibration |
 | V4 (squad values) | 64.5% | 0.8897 | 0.1797 | +4 squad value features |
 | V5 (walk-forward) | 59.6% | **0.8795** | **0.1724** | 11,909-match validation |
-| V6 (LightGBM) | 63.0% | **0.8737** | **0.1747** | LightGBM, +15 features (form_score, streaks, clean_sheets, goal_diff), tradition dropped |
+| V6 (LightGBM) | 63.0% | **0.8328** | **0.1682** | LightGBM, +15 features (form_score, streaks, clean_sheets, goal_diff), tradition dropped, R32 stage detection + neutral flag fix |
+| V7 (MC Sim) | 63.0% | **0.8328** | **0.1682** | Added Dixon-Coles Monte Carlo simulation (100K per match) as parallel prediction alongside pipeline |
 
 ## Data Sources
 

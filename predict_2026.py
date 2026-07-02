@@ -92,6 +92,14 @@ class PredictionDetails:
     blend_alpha: float
     odds_missing: bool
     calibration_note: str = ""
+    mc_home: Optional[float] = None
+    mc_draw: Optional[float] = None
+    mc_away: Optional[float] = None
+    mc_home_ko: Optional[float] = None
+    mc_away_ko: Optional[float] = None
+    mc_avg_goals_home: Optional[float] = None
+    mc_avg_goals_away: Optional[float] = None
+    mc_top_scoreline: Optional[str] = None
 
 
 def compute_features(team, opponent, state, country_features, stage_num, match_date, neutral=True, is_home=False, odds_row=None, squad_values=None):
@@ -274,6 +282,29 @@ def _odds_missing(odds_row: dict) -> bool:
     return any(not np.isfinite(float(odds_row.get(col, np.nan))) for col in ODDS_FEATURE_COLUMNS)
 
 
+def _compute_mc_details(ha, hb, state, stage):
+    """Compute MC simulation results for a match, returning a dict to merge into PredictionDetails."""
+    if _POISSON is None:
+        return {}
+    elo_diff = float(state.get(ha, {}).get("elo", 1500)) - float(state.get(hb, {}).get("elo", 1500))
+    is_ko = stage > 0
+    mc = _POISSON.mc_simulate(ha, hb, neutral=True, n_sims=100_000,
+                               knockout=is_ko, elo_diff=elo_diff if is_ko else None)
+    result = {
+        "mc_home": mc["p_home"],
+        "mc_draw": mc["p_draw"],
+        "mc_away": mc["p_away"],
+        "mc_avg_goals_home": mc["avg_goals_home"],
+        "mc_avg_goals_away": mc["avg_goals_away"],
+    }
+    if is_ko:
+        result["mc_home_ko"] = mc["p_home_ko"]
+        result["mc_away_ko"] = mc["p_away_ko"]
+    if mc.get("top_scorelines"):
+        result["mc_top_scoreline"] = mc["top_scorelines"][0][0]
+    return result
+
+
 def predict_with_details(model, fl, ta, tb, state, cf, stage, date, neutral=True, is_home=False):
     ha, hb = harmonize(ta), harmonize(tb)
     odds_row = odds_features_for_match(_ODDS, date, ha, hb)
@@ -301,6 +332,7 @@ def predict_with_details(model, fl, ta, tb, state, cf, stage, date, neutral=True
             dc_away=float(p_dc[2]) if p_dc is not None else None,
             blend_alpha=float(alpha), odds_missing=_odds_missing(odds_row),
             calibration_note=calibration_note,
+            **_compute_mc_details(ha, hb, state, stage),
         )
     # Knockout stages: no draw possible, renormalize to P(home|no draw), P(away|no draw)
     if stage > 0:
@@ -326,6 +358,7 @@ def predict_with_details(model, fl, ta, tb, state, cf, stage, date, neutral=True
             dc_away=float(p_dc[2]) if p_dc is not None else None,
             blend_alpha=float(alpha), odds_missing=_odds_missing(odds_row),
             calibration_note=calibration_note,
+            **_compute_mc_details(ha, hb, state, stage),
         )
     winner = ta if pa >= pb else tb
     return PredictionDetails(
@@ -338,6 +371,7 @@ def predict_with_details(model, fl, ta, tb, state, cf, stage, date, neutral=True
         dc_away=float(p_dc[2]) if p_dc is not None else None,
         blend_alpha=float(alpha), odds_missing=_odds_missing(odds_row),
         calibration_note=calibration_note,
+        **_compute_mc_details(ha, hb, state, stage),
     )
 
 
@@ -425,7 +459,12 @@ def simulate_round(matches, name, stage, state, model, fl, cf, date, debug=False
         if penalty_note:
             print(f"    {penalty_note}")
         if stage > 0:
-            print(f"    → ✅ {winner} ({prob:.1%})  [WC-calibrated P({ta})={pa:.1%} P({tb})={pb:.1%}]")
+            print(f"    → ✅ {winner} ({prob:.1%})  [Pipeline P({ta})={pa:.1%} P({tb})={pb:.1%}]")
+            if details.mc_home_ko is not None:
+                mc_winner_prob = details.mc_home_ko if winner == ta else details.mc_away_ko
+                print(f"    🎲 MC sim: {ta} {details.mc_home_ko:.1%} | {tb} {details.mc_away_ko:.1%} "
+                      f"(avg {details.mc_avg_goals_home:.1f}-{details.mc_avg_goals_away:.1f}, "
+                      f"likely {details.mc_top_scoreline})")
             print(
                 f"      raw 3-way: P({ta})={details.raw_home:.1%} "
                 f"P(draw)={details.raw_draw:.1%} P({tb})={details.raw_away:.1%}"
@@ -449,7 +488,10 @@ def simulate_round(matches, name, stage, state, model, fl, cf, date, debug=False
                 )
                 print(f"      Dixon-Coles raw: {dc_text}")
         else:
-            print(f"    → ✅ {winner} ({prob:.1%})  [P({ta})={pa:.1%} P(draw)={pd_:.1%} P({tb})={pb:.1%}]")
+            mc_note = ""
+            if details.mc_home is not None:
+                mc_note = f" | MC: {details.mc_home:.0%}/{details.mc_draw:.0%}/{details.mc_away:.0%}"
+            print(f"    → ✅ {winner} ({prob:.1%})  [P({ta})={pa:.1%} P(draw)={pd_:.1%} P({tb})={pb:.1%}]{mc_note}")
     return winners
 
 
@@ -556,7 +598,10 @@ def main():
         apply_group_result(groups, group, ha, at, sa, sb)
         arrow = "←" if prob > 0.55 else "~"
         result_label = "draw" if winner is None else winner
-        print(f"  {date.strftime('%Y-%m-%d')} {home} vs {away} → {result_label} ({prob:.1%}) {arrow}")
+        mc_note = ""
+        if details.mc_home is not None:
+            mc_note = f" | MC: {details.mc_home:.0%}/{details.mc_draw:.0%}/{details.mc_away:.0%}"
+        print(f"  {date.strftime('%Y-%m-%d')} {home} vs {away} → {result_label} ({prob:.1%}) {arrow}{mc_note}")
     
     # === FINAL STANDINGS ===
     print(f"\n{'=' * 70}")
