@@ -61,8 +61,8 @@ Every match is predicted using two independent approaches that run in parallel:
 | M84 | Spain | Austria | **Spain** | 74.0% | 81.4% | ✅ Spain 3-0 |
 | M85 | Switzerland | Algeria | **Switzerland** | 61.0% | 53.9% | ✅ Switzerland 2-0 |
 | M86 | Argentina | Cape Verde | **Argentina** | 96.8% | 98.3% | *July 3* |
-| M87 | Colombia | Ghana | **Colombia** | 95.1% | 95.7% | *July 3* |
-| M88 | Australia | Egypt | **Australia** | 66.1% | 67.0% | *July 3* |
+| M87 | Colombia | Ghana | **Colombia** | 95.1% | 95.8% | *July 3* |
+| M88 | Australia | Egypt | **Australia** | 66.1% | 66.7% | *July 3* |
 
 **R32 accuracy (13 completed): Pipeline 10/13 (76.9%) | MC Sim 10/13 (76.9%)** — 3 misses: Germany-Paraguay (pens), Netherlands-Morocco (pens), Mexico-Ecuador (upset)
 
@@ -70,34 +70,34 @@ Every match is predicted using two independent approaches that run in parallel:
 
 | Match | Home | Away | Pipeline Pred | Pipeline % | MC % |
 |-------|------|------|---------------|-----------|------|
-| M89 | Canada | Morocco | **Morocco** | 66.1% | 59.6% |
-| M90 | Paraguay | France | **France** | 67.6% | 62.5% |
+| M89 | Canada | Morocco | **Morocco** | 66.1% | 60.0% |
+| M90 | Paraguay | France | **France** | 67.6% | 62.8% |
 | M91 | Brazil | Norway | **Brazil** | 74.0% | 90.6% |
-| M92 | Mexico | England | **England** | 66.1% | 65.9% |
-| M93 | Portugal | Spain | **Spain** | 66.1% | 60.1% |
-| M94 | USA | Belgium | **Belgium** | 66.1% | 63.5% |
-| M95 | Argentina | Australia | **Argentina** | 74.0% | 88.0% |
-| M96 | Switzerland | Colombia | **Colombia** | 67.6% | 82.4% |
+| M92 | Mexico | England | **England** | 66.1% | 65.6% |
+| M93 | Portugal | Spain | **Spain** | 66.1% | 60.3% |
+| M94 | USA | Belgium | **Belgium** | 66.1% | 63.8% |
+| M95 | Argentina | Australia | **Argentina** | 74.0% | 88.1% |
+| M96 | Switzerland | Colombia | **Colombia** | 67.6% | 82.3% |
 
 ### Quarterfinals
 
 | Match | Home | Away | Pipeline Pred | Pipeline % | MC % |
 |-------|------|------|---------------|-----------|------|
-| M97 | Morocco | France | **France** | 66.1% | 58.9% |
-| M98 | Spain | Belgium | **Spain** | 67.6% | 66.3% |
-| M99 | Brazil | England | **Brazil** | 66.1% | 72.8% |
-| M100 | Argentina | Colombia | **Argentina** | 66.1% | 67.3% |
+| M97 | Morocco | France | **France** | 66.1% | 58.8% |
+| M98 | Spain | Belgium | **Spain** | 67.6% | 66.6% |
+| M99 | Brazil | England | **Brazil** | 66.1% | 73.1% |
+| M100 | Argentina | Colombia | **Argentina** | 66.1% | 66.9% |
 
 ### Semifinals
 
 | Match | Home | Away | Pipeline Pred | Pipeline % | MC % |
 |-------|------|------|---------------|-----------|------|
-| M101 | France | Spain | **Spain** | 61.0% | 59.7% |
-| M102 | Brazil | Argentina | **Argentina** | 61.0% | 56.0% |
+| M101 | France | Spain | **Spain** | 61.0% | 59.5% |
+| M102 | Brazil | Argentina | **Argentina** | 61.0% | 56.2% |
 
 ### Third Place Match
 
-- France vs Brazil → **Brazil** (Pipeline 66.1% | MC 72.8%)
+- France vs Brazil → **Brazil** (Pipeline 66.1% | MC 73.1%)
 
 ### Final
 
@@ -210,10 +210,10 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 | Metric | Value |
 |--------|-------|
 | **Accuracy** | 64.7% (55/85) |
-| **Log-loss** | 0.8102 |
-| **Brier score** | 0.1630 |
+| **Log-loss** | 0.8084 |
+| **Brier score** | 0.1628 |
 
-**Per-stage:** Group 45/72 (62.5%, LL 0.8806) | R32 10/13 (76.9%, LL 0.4203)
+**Per-stage:** Group 45/72 (62.5%, LL 0.8792) | R32 10/13 (76.9%, LL 0.4164)
 
 ### Model Evolution
 
@@ -225,7 +225,7 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 | V4 (squad values) | 64.5% | 0.8897 | 0.1797 | +4 squad value features |
 | V5 (walk-forward) | 59.6% | **0.8795** | **0.1724** | 11,909-match validation |
 | V6 (LightGBM) | 63.0% | **0.8328** | **0.1682** | LightGBM, +15 features, tradition dropped, R32 stage detection + neutral flag fix |
-| V7 (MC Sim) | 64.7% | **0.8102** | **0.1630** | Added Dixon-Coles Monte Carlo simulation (100K per match) as parallel prediction alongside pipeline |
+| V7 (MC Sim) | 64.7% | **0.8084** | **0.1628** | Added Dixon-Coles Monte Carlo simulation (100K per match) as parallel prediction alongside pipeline |
 
 ## Data Sources
 
