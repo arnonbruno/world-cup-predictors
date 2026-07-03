@@ -4,7 +4,7 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 ## 2026 World Cup Prediction
 
-> **Prediction updated: July 02, 2026** (10 R32 matches complete, 6 remaining)
+> **Prediction updated: July 03, 2026** (13 R32 matches complete, 3 remaining)
 
 ### Two Prediction Methods
 
@@ -57,14 +57,14 @@ Every match is predicted using two independent approaches that run in parallel:
 | M80 | England | DR Congo | **England** | 90.8% | 89.0% | ✅ England 2-1 |
 | M81 | Belgium | Senegal | **Belgium** | 67.6% | 63.5% | ✅ Belgium 3-2 (a.e.t.) |
 | M82 | USA | Bosnia and Herzegovina | **USA** | 74.0% | 83.2% | ✅ USA 2-0 |
-| M83 | Portugal | Croatia | **Portugal** | 66.1% | 66.8% | *July 2* |
-| M84 | Spain | Austria | **Spain** | 74.0% | 81.4% | *July 2* |
-| M85 | Switzerland | Algeria | **Switzerland** | 61.0% | 53.9% | *July 2* |
+| M83 | Portugal | Croatia | **Portugal** | 66.1% | 66.8% | ✅ Portugal 2-1 |
+| M84 | Spain | Austria | **Spain** | 74.0% | 81.4% | ✅ Spain 3-0 |
+| M85 | Switzerland | Algeria | **Switzerland** | 61.0% | 53.9% | ✅ Switzerland 2-0 |
 | M86 | Argentina | Cape Verde | **Argentina** | 96.8% | 98.3% | *July 3* |
 | M87 | Colombia | Ghana | **Colombia** | 95.1% | 95.7% | *July 3* |
 | M88 | Australia | Egypt | **Australia** | 66.1% | 67.0% | *July 3* |
 
-**R32 accuracy: Pipeline 7/10 (70%) | MC Sim 7/10 (70%)** — both miss the same 3 matches (2 penalty shootouts + Mexico upset)
+**R32 accuracy (13 completed): Pipeline 10/13 (76.9%) | MC Sim 10/13 (76.9%)** — 3 misses: Germany-Paraguay (pens), Netherlands-Morocco (pens), Mexico-Ecuador (upset)
 
 ### Round of 16
 
@@ -205,15 +205,15 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 
 **Note:** WC knockout calibration is weaker than overall calibration. At 80-90% confidence on WC matches specifically, actual accuracy is ~57%. The model is aware of this and applies WC-specific calibration for knockout predictions.
 
-### 2026 WC Backtest (82 matches: 72 group + 10 R32)
+### 2026 WC Backtest (85 matches: 72 group + 13 R32)
 
-| Metric | Pipeline | MC Sim |
-|--------|---------|--------|
-| **Accuracy** | 63.4% (52/82) | 70.0% (7/10 KO only)* |
-| **Log-loss** | 0.8250 | 0.4351 (KO only)* |
-| **Brier score** | 0.1664 | — |
+| Metric | Value |
+|--------|-------|
+| **Accuracy** | 64.7% (55/85) |
+| **Log-loss** | 0.8102 |
+| **Brier score** | 0.1630 |
 
-*MC Sim backtest covers 10 R32 knockout matches only. On the same 10 R32 matches, Pipeline also gets 7/10 (70.0%) with log-loss 0.4351. Both approaches miss the same 3 matches: Germany-Paraguay (pens), Netherlands-Morocco (pens), Mexico-Ecuador (upset).
+**Per-stage:** Group 45/72 (62.5%, LL 0.8806) | R32 10/13 (76.9%, LL 0.4203)
 
 ### Model Evolution
 
@@ -225,7 +225,7 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 | V4 (squad values) | 64.5% | 0.8897 | 0.1797 | +4 squad value features |
 | V5 (walk-forward) | 59.6% | **0.8795** | **0.1724** | 11,909-match validation |
 | V6 (LightGBM) | 63.0% | **0.8328** | **0.1682** | LightGBM, +15 features, tradition dropped, R32 stage detection + neutral flag fix |
-| V7 (MC Sim) | 63.4% | **0.8250** | **0.1664** | Added Dixon-Coles Monte Carlo simulation (100K per match) as parallel prediction alongside pipeline |
+| V7 (MC Sim) | 64.7% | **0.8102** | **0.1630** | Added Dixon-Coles Monte Carlo simulation (100K per match) as parallel prediction alongside pipeline |
 
 ## Data Sources
 
@@ -256,7 +256,7 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 ├── analysis.py                # Exploratory analysis
 │
 ├── data/
-│   ├── results.csv            # 49,486 match results (1872-2026)
+│   ├── results.csv            # 49,489 match results (1872-2026)
 │   ├── betting_odds.csv       # 2,144 matches with bookmaker odds
 │   ├── squad_values.csv       # 169 team-years of Transfermarkt values
 │   ├── goalscorers.csv        # Goal-level data
