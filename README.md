@@ -4,7 +4,7 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 ## 2026 World Cup Prediction
 
-> **Prediction updated: July 04, 2026** (all 16 R32 matches complete)
+> **Prediction updated: July 04, 2026** (all 16 R32 matches complete, R16 starts today)
 
 ### Two Prediction Methods
 
@@ -209,11 +209,11 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 
 | Metric | Value |
 |--------|-------|
-| **Accuracy** | 65.9% (58/88) |
-| **Log-loss** | 0.7969 |
-| **Brier score** | 0.1612 |
+| **Accuracy** | 64.8% (57/88) |
+| **Log-loss** | 0.7940 |
+| **Brier score** | 0.1606 |
 
-**Per-stage:** Group 46/72 (63.9%, LL 0.8813) | R32 12/16 (75.0%, LL 0.4172)
+**Per-stage:** Group 45/72 (62.5%, LL 0.8792) | R32 12/16 (75.0%, LL 0.4104)
 
 ### Model Evolution
 
@@ -225,7 +225,7 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 | V4 (squad values) | 64.5% | 0.8897 | 0.1797 | +4 squad value features |
 | V5 (walk-forward) | 59.6% | **0.8795** | **0.1724** | 11,909-match validation |
 | V6 (LightGBM) | 63.0% | **0.8328** | **0.1682** | LightGBM, +15 features, tradition dropped, R32 stage detection + neutral flag fix |
-| V7 (MC Sim) | **65.9%** | **0.7969** | **0.1612** | Added Dixon-Coles Monte Carlo simulation (100K per match) as parallel prediction alongside pipeline |
+| V7 (MC Sim) | **64.8%** | **0.7940** | **0.1606** | Added Dixon-Coles Monte Carlo simulation (100K per match) as parallel prediction alongside pipeline |
 
 ## Data Sources
 
