@@ -4,7 +4,7 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 ## 2026 World Cup Prediction
 
-> **Prediction updated: July 03, 2026** (13 R32 matches complete, 3 remaining)
+> **Prediction updated: July 04, 2026** (all 16 R32 matches complete)
 
 ### Two Prediction Methods
 
@@ -60,11 +60,11 @@ Every match is predicted using two independent approaches that run in parallel:
 | M83 | Portugal | Croatia | **Portugal** | 66.1% | 66.8% | ✅ Portugal 2-1 |
 | M84 | Spain | Austria | **Spain** | 74.0% | 81.4% | ✅ Spain 3-0 |
 | M85 | Switzerland | Algeria | **Switzerland** | 61.0% | 53.9% | ✅ Switzerland 2-0 |
-| M86 | Argentina | Cape Verde | **Argentina** | 96.8% | 98.3% | *July 3* |
-| M87 | Colombia | Ghana | **Colombia** | 95.1% | 95.8% | *July 3* |
-| M88 | Australia | Egypt | **Australia** | 66.1% | 66.7% | *July 3* |
+| M86 | Argentina | Cape Verde | **Argentina** | 96.8% | 98.3% | ✅ Argentina 3-2 (a.e.t.) |
+| M87 | Colombia | Ghana | **Colombia** | 95.1% | 95.8% | ✅ Colombia 1-0 |
+| M88 | Australia | Egypt | **Australia** | 66.1% | 66.7% | ❌ Egypt wins on pens (1-1, 2-4) |
 
-**R32 accuracy (13 completed): Pipeline 10/13 (76.9%) | MC Sim 10/13 (76.9%)** — 3 misses: Germany-Paraguay (pens), Netherlands-Morocco (pens), Mexico-Ecuador (upset)
+**R32 accuracy (16 completed): Pipeline 12/16 (75.0%) | MC Sim 12/16 (75.0%)** — 4 misses: Germany-Paraguay (pens), Netherlands-Morocco (pens), Mexico-Ecuador (upset), Australia-Egypt (pens)
 
 ### Round of 16
 
@@ -76,7 +76,7 @@ Every match is predicted using two independent approaches that run in parallel:
 | M92 | Mexico | England | **England** | 66.1% | 65.6% |
 | M93 | Portugal | Spain | **Spain** | 66.1% | 60.3% |
 | M94 | USA | Belgium | **Belgium** | 66.1% | 63.8% |
-| M95 | Argentina | Australia | **Argentina** | 74.0% | 88.1% |
+| M95 | Argentina | Egypt | **Argentina** | 93.4% | 93.6% |
 | M96 | Switzerland | Colombia | **Colombia** | 67.6% | 82.3% |
 
 ### Quarterfinals
@@ -105,8 +105,8 @@ Every match is predicted using two independent approaches that run in parallel:
 
 ### Path to the Final
 
-- **Argentina:** Cape Verde (R32, 96.8%) → Australia (R16, 74.0%) → Colombia (QF, 66.1%) → Brazil (SF, 61.0%) → Spain (Final, 66.1%)
-- **Spain:** Austria (R32, 74.0%) → Portugal (R16, 66.1%) → Belgium (QF, 67.6%) → France (SF, 61.0%) → Argentina (Final, 33.9%)
+- **Argentina:** Cape Verde (R32, 96.8%) ✅ → Egypt (R16, 93.4%) → Colombia (QF, 66.1%) → Brazil (SF, 61.0%) → Spain (Final, 66.1%)
+- **Spain:** Austria (R32, 74.0%) ✅ → Portugal (R16, 66.1%) → Belgium (QF, 67.6%) → France (SF, 61.0%) → Argentina (Final, 33.9%)
 - **Brazil:** Japan (R32, 74.0%) ✅ → Norway (R16, 74.0%) → England (QF, 66.1%) → Argentina (SF, 39.0%) → France (3rd, 66.1%)
 - **France:** Sweden (R32, 74.0%) ✅ → Paraguay (R16, 67.6%) → Morocco (QF, 66.1%) → Spain (SF, 39.0%) → Brazil (3rd)
 
@@ -205,15 +205,15 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 
 **Note:** WC knockout calibration is weaker than overall calibration. At 80-90% confidence on WC matches specifically, actual accuracy is ~57%. The model is aware of this and applies WC-specific calibration for knockout predictions.
 
-### 2026 WC Backtest (85 matches: 72 group + 13 R32)
+### 2026 WC Backtest (88 matches: 72 group + 16 R32)
 
 | Metric | Value |
 |--------|-------|
-| **Accuracy** | 64.7% (55/85) |
-| **Log-loss** | 0.8084 |
-| **Brier score** | 0.1628 |
+| **Accuracy** | 65.9% (58/88) |
+| **Log-loss** | 0.7969 |
+| **Brier score** | 0.1612 |
 
-**Per-stage:** Group 45/72 (62.5%, LL 0.8792) | R32 10/13 (76.9%, LL 0.4164)
+**Per-stage:** Group 46/72 (63.9%, LL 0.8813) | R32 12/16 (75.0%, LL 0.4172)
 
 ### Model Evolution
 
@@ -225,7 +225,7 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 | V4 (squad values) | 64.5% | 0.8897 | 0.1797 | +4 squad value features |
 | V5 (walk-forward) | 59.6% | **0.8795** | **0.1724** | 11,909-match validation |
 | V6 (LightGBM) | 63.0% | **0.8328** | **0.1682** | LightGBM, +15 features, tradition dropped, R32 stage detection + neutral flag fix |
-| V7 (MC Sim) | 64.7% | **0.8084** | **0.1628** | Added Dixon-Coles Monte Carlo simulation (100K per match) as parallel prediction alongside pipeline |
+| V7 (MC Sim) | **65.9%** | **0.7969** | **0.1612** | Added Dixon-Coles Monte Carlo simulation (100K per match) as parallel prediction alongside pipeline |
 
 ## Data Sources
 

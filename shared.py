@@ -752,6 +752,7 @@ def harmonize_country(name: object) -> object:
 WC2026_PENALTY_WINNERS = {
     frozenset(("Germany", "Paraguay")): "Paraguay",
     frozenset(("Netherlands", "Morocco")): "Morocco",
+    frozenset(("Australia", "Egypt")): "Egypt",
 }
 
 
