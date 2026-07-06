@@ -656,7 +656,7 @@ def main():
         ('R16 M95', r32_w[13], r32_w[15]), # W86 vs W88
         ('R16 M96', r32_w[12], r32_w[14]), # W85 vs W87
     ]
-    r16_w = simulate_round(r16, "ROUND OF 16", WC2026_STAGE_TO_TRAIN["round_of_16"], state, model, fl, cf, pd.Timestamp('2026-07-04'), debug=args.debug)
+    r16_w = simulate_round(r16, "ROUND OF 16", WC2026_STAGE_TO_TRAIN["round_of_16"], state, model, fl, cf, pd.Timestamp('2026-07-04'), debug=args.debug, completed=completed_r32)
     
     # QF: M97: W89 vs W90 | M98: W93 vs W94 | M99: W91 vs W92 | M100: W95 vs W96
     # Bracket: (89/90 side) vs (93/94 side) → SF101, (91/92 side) vs (95/96 side) → SF102
@@ -666,7 +666,7 @@ def main():
         ('QF M99', r16_w[2], r16_w[3]),  # W91 vs W92 (left-bot: Brazil path vs Mexico/England)
         ('QF M100', r16_w[6], r16_w[7]), # W95 vs W96 (right-bot: Argentina/Bel vs Swi/Port)
     ]
-    qf_w = simulate_round(qf, "QUARTERFINALS", WC2026_STAGE_TO_TRAIN["quarterfinal"], state, model, fl, cf, pd.Timestamp('2026-07-09'), debug=args.debug)
+    qf_w = simulate_round(qf, "QUARTERFINALS", WC2026_STAGE_TO_TRAIN["quarterfinal"], state, model, fl, cf, pd.Timestamp('2026-07-09'), debug=args.debug, completed=completed_r32)
     
     # SF: M101: W97 vs W98 | M102: W99 vs W100
     # Germany side (QF97/98) vs Brazil side (QF99/100) → they can only meet in FINAL
@@ -674,7 +674,7 @@ def main():
         ('SF M101', qf_w[0], qf_w[1]),  # left side (Germany's half)
         ('SF M102', qf_w[2], qf_w[3]),  # right side (Brazil's half)
     ]
-    sf_w = simulate_round(sf, "SEMIFINALS", WC2026_STAGE_TO_TRAIN["semifinal"], state, model, fl, cf, pd.Timestamp('2026-07-14'), debug=args.debug)
+    sf_w = simulate_round(sf, "SEMIFINALS", WC2026_STAGE_TO_TRAIN["semifinal"], state, model, fl, cf, pd.Timestamp('2026-07-14'), debug=args.debug, completed=completed_r32)
     
     # 3rd place: L101 vs L102
     sf_losers = [qf_w[i] for i in range(4) if qf_w[i] not in sf_w]

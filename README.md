@@ -4,7 +4,7 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 ## 2026 World Cup Prediction
 
-> **Prediction updated: July 04, 2026** (all 16 R32 matches complete, R16 starts today)
+> **Prediction updated: July 06, 2026** (20 R32+R16 complete, 4 QF remaining)
 
 ### Two Prediction Methods
 
@@ -12,15 +12,15 @@ Every match is predicted using two independent approaches that run in parallel:
 
 **1. Pipeline (LGBM + DC Blend)** — The production model. LightGBM gradient-boosted trees (75 features) are blended with the Dixon-Coles Poisson goal model (75% DC / 25% LGBM for group stage, 50/50 for knockouts). The blend is then isotonic-calibrated on a chronological holdout, renormalized for knockouts (draws removed), and adjusted with WC-specific calibration buckets. This is the primary prediction.
 
-**2. MC Simulation (100K Monte Carlo)** — Samples 100,000 match outcomes from the fitted Dixon-Coles scoreline probability grid. Each simulation samples goals for both teams from the Poisson distribution parameterized by DC attack/defense strengths, applies the Dixon-Coles low-score correlation correction (rho), and for knockouts resolves draws via extra time (30% increased scoring rate) and penalty shootouts (Elo-based win probability, not 50/50). Produces scoreline distributions, goal market probabilities (BTTS, over/under), and win probabilities.
+**2. MC Simulation (100K Monte Carlo)** — Samples 100,000 match outcomes from the fitted Dixon-Coles scoreline probability grid. Each simulation samples goals for both teams from the Poisson distribution parameterized by DC attack/defense strengths, applies the Dixon-Coles low-score correction (rho), and for knockouts resolves draws via extra time (30% increased scoring rate) and penalty shootouts (Elo-based win probability, not 50/50). Produces scoreline distributions, goal market probabilities (BTTS, over/under), and win probabilities.
 
-**Why both?** The pipeline incorporates LGBM's pattern recognition (form, streaks, momentum) on top of the DC goal model, while the MC simulation gives a pure goal-level view from the DC model alone. When both agree, confidence is high. When they diverge (e.g., Brazil vs Norway: Pipeline 74% vs MC 90.5%), the gap reflects LGBM pulling the DC estimate back toward features the goal model can't see.
+**Why both?** The pipeline incorporates LGBM's pattern recognition (form, streaks, momentum) on top of the DC goal model, while the MC simulation gives a pure goal-level view from the DC model alone. When both agree, confidence is high. When they diverge, the gap reflects information the goal model can't see.
 
 | Place | Team | Probability |
 |-------|------|-------------|
 | 🥇 Champion | **Argentina** | 66.1% |
 | 🥈 Runner-up | **Spain** | — |
-| 🥉 Third | **Brazil** | 66.1% (vs France) |
+| 🥉 Third | **England** | 61.0% (vs France) |
 | 4th | **France** | — |
 
 ### Group Stage Results (all 72 matches complete)
@@ -64,40 +64,42 @@ Every match is predicted using two independent approaches that run in parallel:
 | M87 | Colombia | Ghana | **Colombia** | 95.1% | 95.8% | ✅ Colombia 1-0 |
 | M88 | Australia | Egypt | **Australia** | 66.1% | 66.7% | ❌ Egypt wins on pens (1-1, 2-4) |
 
-**R32 accuracy (16 completed): Pipeline 12/16 (75.0%) | MC Sim 12/16 (75.0%)** — 4 misses: Germany-Paraguay (pens), Netherlands-Morocco (pens), Mexico-Ecuador (upset), Australia-Egypt (pens)
+**R32 accuracy (16/16 complete): Pipeline 14/16 (87.5%) | MC Sim 14/16 (87.5%)** — 2 misses: Germany-Paraguay (pens), Netherlands-Morocco (pens)
 
 ### Round of 16
 
-| Match | Home | Away | Pipeline Pred | Pipeline % | MC % |
-|-------|------|------|---------------|-----------|------|
-| M89 | Canada | Morocco | **Morocco** | 66.1% | 60.0% |
-| M90 | Paraguay | France | **France** | 67.6% | 62.8% |
-| M91 | Brazil | Norway | **Brazil** | 74.0% | 90.6% |
-| M92 | Mexico | England | **England** | 66.1% | 65.6% |
-| M93 | Portugal | Spain | **Spain** | 66.1% | 60.3% |
-| M94 | USA | Belgium | **Belgium** | 66.1% | 63.8% |
-| M95 | Argentina | Egypt | **Argentina** | 93.4% | 93.6% |
-| M96 | Switzerland | Colombia | **Colombia** | 67.6% | 82.3% |
+| Match | Home | Away | Pipeline Pred | Pipeline % | MC % | Result |
+|-------|------|------|---------------|-----------|------|--------|
+| M89 | Canada | Morocco | **Morocco** | 66.1% | 60.0% | ✅ Morocco 3-0 |
+| M90 | Paraguay | France | **France** | 67.6% | 62.8% | ✅ France 1-0 |
+| M91 | Brazil | Norway | **Brazil** | 74.0% | 90.3% | ❌ Norway 2-1 |
+| M92 | Mexico | England | **England** | 67.6% | 66.0% | ✅ England 3-2 |
+| M93 | Portugal | Spain | **Spain** | 66.1% | 60.2% | — |
+| M94 | USA | Belgium | **Belgium** | 66.1% | 63.4% | — |
+| M95 | Argentina | Egypt | **Argentina** | 93.4% | 93.8% | — |
+| M96 | Switzerland | Colombia | **Colombia** | 67.6% | 82.5% | — |
+
+**R16 accuracy (4/8 complete): Pipeline 3/4 (75.0%)** — 1 miss: Brazil-Norway (model predicted Brazil at 74%, Norway won 2-1)
 
 ### Quarterfinals
 
 | Match | Home | Away | Pipeline Pred | Pipeline % | MC % |
 |-------|------|------|---------------|-----------|------|
-| M97 | Morocco | France | **France** | 66.1% | 58.8% |
-| M98 | Spain | Belgium | **Spain** | 67.6% | 66.6% |
-| M99 | Brazil | England | **Brazil** | 66.1% | 73.1% |
+| M97 | Morocco | France | **France** | 66.1% | 58.4% |
+| M98 | Spain | Belgium | **Spain** | 67.6% | 66.3% |
+| M99 | Norway | England | **England** | 67.6% | 74.2% |
 | M100 | Argentina | Colombia | **Argentina** | 66.1% | 66.9% |
 
 ### Semifinals
 
 | Match | Home | Away | Pipeline Pred | Pipeline % | MC % |
 |-------|------|------|---------------|-----------|------|
-| M101 | France | Spain | **Spain** | 61.0% | 59.5% |
-| M102 | Brazil | Argentina | **Argentina** | 61.0% | 56.2% |
+| SF M101 | France | Spain | **Spain** | 61.0% | 59.5% |
+| SF M102 | England | Argentina | **Argentina** | 67.6% | 76.4% |
 
 ### Third Place Match
 
-- France vs Brazil → **Brazil** (Pipeline 66.1% | MC 73.1%)
+- France vs England → **England** (Pipeline 61.0% | MC 59.8%)
 
 ### Final
 
@@ -105,10 +107,11 @@ Every match is predicted using two independent approaches that run in parallel:
 
 ### Path to the Final
 
-- **Argentina:** Cape Verde (R32, 96.8%) ✅ → Egypt (R16, 93.4%) → Colombia (QF, 66.1%) → Brazil (SF, 61.0%) → Spain (Final, 66.1%)
+- **Argentina:** Cape Verde (R32, 96.8%) ✅ → Egypt (R16, 93.4%) → Colombia (QF, 66.1%) → England (SF, 67.6%) → Spain (Final, 66.1%)
 - **Spain:** Austria (R32, 74.0%) ✅ → Portugal (R16, 66.1%) → Belgium (QF, 67.6%) → France (SF, 61.0%) → Argentina (Final, 33.9%)
-- **Brazil:** Japan (R32, 74.0%) ✅ → Norway (R16, 74.0%) → England (QF, 66.1%) → Argentina (SF, 39.0%) → France (3rd, 66.1%)
-- **France:** Sweden (R32, 74.0%) ✅ → Paraguay (R16, 67.6%) → Morocco (QF, 66.1%) → Spain (SF, 39.0%) → Brazil (3rd)
+- **Norway:** Côte d'Ivoire (R32, 61.0%) ✅ → Brazil (R16, 26.0%) ✅ → England (QF, 32.4%)
+- **England:** DR Congo (R32, 90.8%) ✅ → Mexico (R16, 67.6%) ✅ → Norway (QF, 67.6%) → Argentina (SF, 32.4%) → France (3rd)
+- **France:** Sweden (R32, 74.0%) ✅ → Paraguay (R16, 67.6%) ✅ → Morocco (QF, 66.1%) → Spain (SF, 39.0%) → England (3rd)
 
 ## How It Works
 
@@ -205,15 +208,15 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 
 **Note:** WC knockout calibration is weaker than overall calibration. At 80-90% confidence on WC matches specifically, actual accuracy is ~57%. The model is aware of this and applies WC-specific calibration for knockout predictions.
 
-### 2026 WC Backtest (88 matches: 72 group + 16 R32)
+### 2026 WC Backtest (92 matches: 72 group + 16 R32 + 4 R16)
 
 | Metric | Value |
 |--------|-------|
-| **Accuracy** | 64.8% (57/88) |
-| **Log-loss** | 0.7940 |
-| **Brier score** | 0.1606 |
+| **Accuracy** | 65.2% (60/92) |
+| **Log-loss** | 0.7921 |
+| **Brier score** | 0.1608 |
 
-**Per-stage:** Group 45/72 (62.5%, LL 0.8792) | R32 12/16 (75.0%, LL 0.4104)
+**Per-stage:** Group 45/72 (62.5%, LL 0.8792) | R32 15/20 (75.0%, LL 0.4784)
 
 ### Model Evolution
 
@@ -225,7 +228,7 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 | V4 (squad values) | 64.5% | 0.8897 | 0.1797 | +4 squad value features |
 | V5 (walk-forward) | 59.6% | **0.8795** | **0.1724** | 11,909-match validation |
 | V6 (LightGBM) | 63.0% | **0.8328** | **0.1682** | LightGBM, +15 features, tradition dropped, R32 stage detection + neutral flag fix |
-| V7 (MC Sim) | **64.8%** | **0.7940** | **0.1606** | Added Dixon-Coles Monte Carlo simulation (100K per match) as parallel prediction alongside pipeline |
+| V7 (MC Sim) | **65.2%** | **0.7921** | **0.1608** | Added Dixon-Coles Monte Carlo simulation (100K per match) as parallel prediction alongside pipeline, fixed R16/QF/SF completed-match detection |
 
 ## Data Sources
 
