@@ -4,7 +4,7 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 ## 2026 World Cup Prediction
 
-> **Prediction updated: July 06, 2026** (20 R32+R16 complete, 4 QF remaining)
+> **Prediction updated: July 07, 2026** (22 R32+R16 complete, 4 QF remaining)
 
 ### Two Prediction Methods
 
@@ -74,32 +74,32 @@ Every match is predicted using two independent approaches that run in parallel:
 | M90 | Paraguay | France | **France** | 67.6% | 62.8% | ✅ France 1-0 |
 | M91 | Brazil | Norway | **Brazil** | 74.0% | 90.3% | ❌ Norway 2-1 |
 | M92 | Mexico | England | **England** | 67.6% | 66.0% | ✅ England 3-2 |
-| M93 | Portugal | Spain | **Spain** | 66.1% | 60.2% | — |
-| M94 | USA | Belgium | **Belgium** | 66.1% | 63.4% | — |
+| M93 | Portugal | Spain | **Spain** | 66.1% | 60.2% | ✅ Spain 1-0 |
+| M94 | USA | Belgium | **Belgium** | 66.1% | 63.4% | ✅ Belgium 4-1 |
 | M95 | Argentina | Egypt | **Argentina** | 93.4% | 93.8% | — |
 | M96 | Switzerland | Colombia | **Colombia** | 67.6% | 82.5% | — |
 
-**R16 accuracy (4/8 complete): Pipeline 3/4 (75.0%)** — 1 miss: Brazil-Norway (model predicted Brazil at 74%, Norway won 2-1)
+**R16 accuracy (6/8 complete): Pipeline 5/6 (83.3%)** — 1 miss: Brazil-Norway (model predicted Brazil at 74%, Norway won 2-1)
 
 ### Quarterfinals
 
 | Match | Home | Away | Pipeline Pred | Pipeline % | MC % |
 |-------|------|------|---------------|-----------|------|
-| M97 | Morocco | France | **France** | 66.1% | 58.4% |
-| M98 | Spain | Belgium | **Spain** | 67.6% | 66.3% |
-| M99 | Norway | England | **England** | 67.6% | 74.2% |
-| M100 | Argentina | Colombia | **Argentina** | 66.1% | 66.9% |
+| M97 | Morocco | France | **France** | 66.1% | 58.5% |
+| M98 | Spain | Belgium | **Spain** | 67.6% | 66.6% |
+| M99 | Norway | England | **England** | 67.6% | 74.1% |
+| M100 | Argentina | Colombia | **Argentina** | 66.1% | 67.1% |
 
 ### Semifinals
 
 | Match | Home | Away | Pipeline Pred | Pipeline % | MC % |
 |-------|------|------|---------------|-----------|------|
 | SF M101 | France | Spain | **Spain** | 61.0% | 59.5% |
-| SF M102 | England | Argentina | **Argentina** | 67.6% | 76.4% |
+| SF M102 | England | Argentina | **Argentina** | 67.6% | 76.2% |
 
 ### Third Place Match
 
-- France vs England → **England** (Pipeline 61.0% | MC 59.8%)
+- France vs England → **England** (Pipeline 61.0% | MC 59.5%)
 
 ### Final
 
@@ -108,7 +108,7 @@ Every match is predicted using two independent approaches that run in parallel:
 ### Path to the Final
 
 - **Argentina:** Cape Verde (R32, 96.8%) ✅ → Egypt (R16, 93.4%) → Colombia (QF, 66.1%) → England (SF, 67.6%) → Spain (Final, 66.1%)
-- **Spain:** Austria (R32, 74.0%) ✅ → Portugal (R16, 66.1%) → Belgium (QF, 67.6%) → France (SF, 61.0%) → Argentina (Final, 33.9%)
+- **Spain:** Austria (R32, 74.0%) ✅ → Portugal (R16, 66.1%) ✅ → Belgium (QF, 67.6%) → France (SF, 61.0%) → Argentina (Final, 33.9%)
 - **Norway:** Côte d'Ivoire (R32, 61.0%) ✅ → Brazil (R16, 26.0%) ✅ → England (QF, 32.4%)
 - **England:** DR Congo (R32, 90.8%) ✅ → Mexico (R16, 67.6%) ✅ → Norway (QF, 67.6%) → Argentina (SF, 32.4%) → France (3rd)
 - **France:** Sweden (R32, 74.0%) ✅ → Paraguay (R16, 67.6%) ✅ → Morocco (QF, 66.1%) → Spain (SF, 39.0%) → England (3rd)
@@ -208,15 +208,15 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 
 **Note:** WC knockout calibration is weaker than overall calibration. At 80-90% confidence on WC matches specifically, actual accuracy is ~57%. The model is aware of this and applies WC-specific calibration for knockout predictions.
 
-### 2026 WC Backtest (92 matches: 72 group + 16 R32 + 4 R16)
+### 2026 WC Backtest (94 matches: 72 group + 22 KO)
 
 | Metric | Value |
 |--------|-------|
-| **Accuracy** | 65.2% (60/92) |
-| **Log-loss** | 0.7921 |
-| **Brier score** | 0.1608 |
+| **Accuracy** | 66.0% (62/94) |
+| **Log-loss** | 0.7847 |
+| **Brier score** | 0.1592 |
 
-**Per-stage:** Group 45/72 (62.5%, LL 0.8792) | R32 15/20 (75.0%, LL 0.4784)
+**Per-stage:** Group 45/72 (62.5%, LL 0.8792) | KO 17/22 (77.3%, LL 0.4755)
 
 ### Model Evolution
 
