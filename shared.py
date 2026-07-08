@@ -753,6 +753,7 @@ WC2026_PENALTY_WINNERS = {
     frozenset(("Germany", "Paraguay")): "Paraguay",
     frozenset(("Netherlands", "Morocco")): "Morocco",
     frozenset(("Australia", "Egypt")): "Egypt",
+    frozenset(("Switzerland", "Colombia")): "Switzerland",
 }
 
 

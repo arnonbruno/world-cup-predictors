@@ -4,7 +4,7 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 ## 2026 World Cup Prediction
 
-> **Prediction updated: July 07, 2026** (22 R32+R16 complete, 4 QF remaining)
+> **Prediction updated: July 08, 2026** (24 R32+R16 complete, 4 QF remaining)
 
 ### Two Prediction Methods
 
@@ -76,10 +76,10 @@ Every match is predicted using two independent approaches that run in parallel:
 | M92 | Mexico | England | **England** | 67.6% | 66.0% | ✅ England 3-2 |
 | M93 | Portugal | Spain | **Spain** | 66.1% | 60.2% | ✅ Spain 1-0 |
 | M94 | USA | Belgium | **Belgium** | 66.1% | 63.4% | ✅ Belgium 4-1 |
-| M95 | Argentina | Egypt | **Argentina** | 93.4% | 93.8% | — |
-| M96 | Switzerland | Colombia | **Colombia** | 67.6% | 82.5% | — |
+| M95 | Argentina | Egypt | **Argentina** | 93.4% | 93.8% | ✅ Argentina 3-2 |
+| M96 | Switzerland | Colombia | **Colombia** | 67.6% | 82.5% | ❌ Switzerland wins on pens (0-0, 4-3) |
 
-**R16 accuracy (6/8 complete): Pipeline 5/6 (83.3%)** — 1 miss: Brazil-Norway (model predicted Brazil at 74%, Norway won 2-1)
+**R16 accuracy (8/8 complete): Pipeline 6/8 (75.0%)** — misses: Brazil-Norway (model predicted Brazil at 74%), Switzerland-Colombia (model predicted Colombia at 67.6%, Switzerland won on penalties)
 
 ### Quarterfinals
 
@@ -88,18 +88,18 @@ Every match is predicted using two independent approaches that run in parallel:
 | M97 | Morocco | France | **France** | 66.1% | 58.5% |
 | M98 | Spain | Belgium | **Spain** | 67.6% | 66.6% |
 | M99 | Norway | England | **England** | 67.6% | 74.1% |
-| M100 | Argentina | Colombia | **Argentina** | 66.1% | 67.1% |
+| M100 | Argentina | Switzerland | **Argentina** | 74.0% | 91.0% |
 
 ### Semifinals
 
 | Match | Home | Away | Pipeline Pred | Pipeline % | MC % |
 |-------|------|------|---------------|-----------|------|
-| SF M101 | France | Spain | **Spain** | 61.0% | 59.5% |
-| SF M102 | England | Argentina | **Argentina** | 67.6% | 76.2% |
+| SF M101 | France | Spain | **Spain** | 61.0% | 59.4% |
+| SF M102 | England | Argentina | **Argentina** | 67.6% | 76.1% |
 
 ### Third Place Match
 
-- France vs England → **England** (Pipeline 61.0% | MC 59.5%)
+- France vs England → **England** (Pipeline 61.0% | MC 59.4%)
 
 ### Final
 
@@ -107,7 +107,7 @@ Every match is predicted using two independent approaches that run in parallel:
 
 ### Path to the Final
 
-- **Argentina:** Cape Verde (R32, 96.8%) ✅ → Egypt (R16, 93.4%) → Colombia (QF, 66.1%) → England (SF, 67.6%) → Spain (Final, 66.1%)
+- **Argentina:** Cape Verde (R32, 96.8%) ✅ → Egypt (R16, 93.4%) ✅ → Switzerland (QF, 74.0%) → England (SF, 67.6%) → Spain (Final, 66.1%)
 - **Spain:** Austria (R32, 74.0%) ✅ → Portugal (R16, 66.1%) ✅ → Belgium (QF, 67.6%) → France (SF, 61.0%) → Argentina (Final, 33.9%)
 - **Norway:** Côte d'Ivoire (R32, 61.0%) ✅ → Brazil (R16, 26.0%) ✅ → England (QF, 32.4%)
 - **England:** DR Congo (R32, 90.8%) ✅ → Mexico (R16, 67.6%) ✅ → Norway (QF, 67.6%) → Argentina (SF, 32.4%) → France (3rd)
@@ -208,15 +208,15 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 
 **Note:** WC knockout calibration is weaker than overall calibration. At 80-90% confidence on WC matches specifically, actual accuracy is ~57%. The model is aware of this and applies WC-specific calibration for knockout predictions.
 
-### 2026 WC Backtest (94 matches: 72 group + 22 KO)
+### 2026 WC Backtest (96 matches: 72 group + 24 KO)
 
 | Metric | Value |
 |--------|-------|
-| **Accuracy** | 66.0% (62/94) |
-| **Log-loss** | 0.7847 |
-| **Brier score** | 0.1592 |
+| **Accuracy** | 65.6% (63/96) |
+| **Log-loss** | 0.7841 |
+| **Brier score** | 0.1597 |
 
-**Per-stage:** Group 45/72 (62.5%, LL 0.8792) | KO 17/22 (77.3%, LL 0.4755)
+**Per-stage:** Group 45/72 (62.5%, LL 0.8792) | KO 18/24 (75.0%, LL 0.4945)
 
 ### Model Evolution
 
@@ -228,7 +228,7 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 | V4 (squad values) | 64.5% | 0.8897 | 0.1797 | +4 squad value features |
 | V5 (walk-forward) | 59.6% | **0.8795** | **0.1724** | 11,909-match validation |
 | V6 (LightGBM) | 63.0% | **0.8328** | **0.1682** | LightGBM, +15 features, tradition dropped, R32 stage detection + neutral flag fix |
-| V7 (MC Sim) | **65.2%** | **0.7921** | **0.1608** | Added Dixon-Coles Monte Carlo simulation (100K per match) as parallel prediction alongside pipeline, fixed R16/QF/SF completed-match detection |
+| V7 (MC Sim) | **65.6%** | **0.7841** | **0.1597** | Added Dixon-Coles Monte Carlo simulation (100K per match), fixed R16/QF/SF completed-match detection |
 
 ## Data Sources
 
