@@ -4,7 +4,7 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 ## 2026 World Cup Prediction
 
-> **Prediction updated: July 08, 2026** (24 R32+R16 complete, 4 QF remaining)
+> **Prediction updated: July 09, 2026** (24 R32+R16 complete, 4 QF remaining — France vs Morocco TODAY)
 
 ### Two Prediction Methods
 
@@ -85,17 +85,17 @@ Every match is predicted using two independent approaches that run in parallel:
 
 | Match | Home | Away | Pipeline Pred | Pipeline % | MC % |
 |-------|------|------|---------------|-----------|------|
-| M97 | Morocco | France | **France** | 66.1% | 58.5% |
+| M97 | Morocco | France | **France** | 66.1% | 58.8% |
 | M98 | Spain | Belgium | **Spain** | 67.6% | 66.6% |
-| M99 | Norway | England | **England** | 67.6% | 74.1% |
-| M100 | Argentina | Switzerland | **Argentina** | 74.0% | 91.0% |
+| M99 | Norway | England | **England** | 67.6% | 73.9% |
+| M100 | Argentina | Switzerland | **Argentina** | 74.0% | 90.9% |
 
 ### Semifinals
 
 | Match | Home | Away | Pipeline Pred | Pipeline % | MC % |
 |-------|------|------|---------------|-----------|------|
-| SF M101 | France | Spain | **Spain** | 61.0% | 59.4% |
-| SF M102 | England | Argentina | **Argentina** | 67.6% | 76.1% |
+| SF M101 | France | Spain | **Spain** | 61.0% | 59.3% |
+| SF M102 | England | Argentina | **Argentina** | 67.6% | 76.3% |
 
 ### Third Place Match
 
@@ -213,10 +213,10 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 | Metric | Value |
 |--------|-------|
 | **Accuracy** | 65.6% (63/96) |
-| **Log-loss** | 0.7841 |
-| **Brier score** | 0.1597 |
+| **Log-loss** | 0.7815 |
+| **Brier score** | 0.1593 |
 
-**Per-stage:** Group 45/72 (62.5%, LL 0.8792) | KO 18/24 (75.0%, LL 0.4945)
+**Per-stage:** Group 45/72 (62.5%, LL 0.8792) | KO 18/24 (75.0%, LL 0.4884)
 
 ### Model Evolution
 
@@ -228,7 +228,7 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 | V4 (squad values) | 64.5% | 0.8897 | 0.1797 | +4 squad value features |
 | V5 (walk-forward) | 59.6% | **0.8795** | **0.1724** | 11,909-match validation |
 | V6 (LightGBM) | 63.0% | **0.8328** | **0.1682** | LightGBM, +15 features, tradition dropped, R32 stage detection + neutral flag fix |
-| V7 (MC Sim) | **65.6%** | **0.7841** | **0.1597** | Added Dixon-Coles Monte Carlo simulation (100K per match), fixed R16/QF/SF completed-match detection |
+| V7 (MC Sim) | **65.6%** | **0.7815** | **0.1593** | Added Dixon-Coles Monte Carlo simulation (100K per match), fixed R16/QF/SF completed-match detection |
 
 ## Data Sources
 
