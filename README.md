@@ -4,7 +4,7 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 ## 2026 World Cup Prediction
 
-> **Prediction updated: July 09, 2026** (24 R32+R16 complete, 4 QF remaining — France vs Morocco TODAY)
+> **Prediction updated: July 10, 2026** (25 R32+R16+QF complete, 3 QF remaining)
 
 ### Two Prediction Methods
 
@@ -64,7 +64,7 @@ Every match is predicted using two independent approaches that run in parallel:
 | M87 | Colombia | Ghana | **Colombia** | 95.1% | 95.8% | ✅ Colombia 1-0 |
 | M88 | Australia | Egypt | **Australia** | 66.1% | 66.7% | ❌ Egypt wins on pens (1-1, 2-4) |
 
-**R32 accuracy (16/16 complete): Pipeline 14/16 (87.5%) | MC Sim 14/16 (87.5%)** — 2 misses: Germany-Paraguay (pens), Netherlands-Morocco (pens)
+**R32 accuracy (16/16 complete): Pipeline 12/16 (75.0%)** — 4 misses: Germany-Paraguay (pens), Netherlands-Morocco (pens), Mexico-Ecuador (upset), Australia-Egypt (pens)
 
 ### Round of 16
 
@@ -83,19 +83,19 @@ Every match is predicted using two independent approaches that run in parallel:
 
 ### Quarterfinals
 
-| Match | Home | Away | Pipeline Pred | Pipeline % | MC % |
-|-------|------|------|---------------|-----------|------|
-| M97 | Morocco | France | **France** | 66.1% | 58.8% |
-| M98 | Spain | Belgium | **Spain** | 67.6% | 66.6% |
-| M99 | Norway | England | **England** | 67.6% | 73.9% |
-| M100 | Argentina | Switzerland | **Argentina** | 74.0% | 90.9% |
+| Match | Home | Away | Pipeline Pred | Pipeline % | MC % | Result |
+|-------|------|------|---------------|-----------|------|--------|
+| M97 | Morocco | France | **France** | 66.1% | 58.8% | ✅ France 2-0 |
+| M98 | Spain | Belgium | **Spain** | 67.6% | 66.6% | |
+| M99 | Norway | England | **England** | 67.6% | 74.4% | |
+| M100 | Argentina | Switzerland | **Argentina** | 74.0% | 91.0% | |
 
 ### Semifinals
 
 | Match | Home | Away | Pipeline Pred | Pipeline % | MC % |
 |-------|------|------|---------------|-----------|------|
-| SF M101 | France | Spain | **Spain** | 61.0% | 59.3% |
-| SF M102 | England | Argentina | **Argentina** | 67.6% | 76.3% |
+| SF M101 | France | Spain | **Spain** | 61.0% | 59.7% |
+| SF M102 | England | Argentina | **Argentina** | 67.6% | 76.4% |
 
 ### Third Place Match
 
@@ -208,15 +208,15 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 
 **Note:** WC knockout calibration is weaker than overall calibration. At 80-90% confidence on WC matches specifically, actual accuracy is ~57%. The model is aware of this and applies WC-specific calibration for knockout predictions.
 
-### 2026 WC Backtest (96 matches: 72 group + 24 KO)
+### 2026 WC Backtest (97 matches: 72 group + 25 KO)
 
 | Metric | Value |
 |--------|-------|
-| **Accuracy** | 65.6% (63/96) |
-| **Log-loss** | 0.7815 |
-| **Brier score** | 0.1593 |
+| **Accuracy** | 66.0% (64/97) |
+| **Log-loss** | 0.7776 |
+| **Brier score** | 0.1584 |
 
-**Per-stage:** Group 45/72 (62.5%, LL 0.8792) | KO 18/24 (75.0%, LL 0.4884)
+**Per-stage:** Group 45/72 (62.5%, LL 0.8792) | KO 19/25 (76.0%, LL 0.4855)
 
 ### Model Evolution
 
