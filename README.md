@@ -4,7 +4,7 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 ## 2026 World Cup Prediction
 
-> **Prediction updated: July 12, 2026** (28 R32+R16+QF complete, 2 SF remaining)
+> **Prediction updated: July 14, 2026** (28 R32+R16+QF complete, 2 SF remaining — today: France vs Spain)
 
 ### Two Prediction Methods
 
@@ -230,7 +230,7 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 | V4 (squad values) | 64.5% | 0.8897 | 0.1797 | +4 squad value features |
 | V5 (walk-forward) | 59.6% | **0.8795** | **0.1724** | 11,909-match validation |
 | V6 (LightGBM) | 63.0% | **0.8328** | **0.1682** | LightGBM, +15 features, tradition dropped, R32 stage detection + neutral flag fix |
-| V7 (MC Sim) | **67.0%** | **0.7641** | **0.1551** | Added Dixon-Coles Monte Carlo simulation (100K per match), fixed R16/QF/SF completed-match detection, QF 4/4 |
+| V7 (MC Sim) | **67.0%** | **0.7618** | **0.1547** | Added Dixon-Coles Monte Carlo simulation (100K per match), fixed R16/QF/SF completed-match detection, QF 4/4 |
 
 ## Data Sources
 
