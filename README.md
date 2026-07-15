@@ -4,7 +4,7 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 ## 2026 World Cup Prediction
 
-> **Prediction updated: July 14, 2026** (28 R32+R16+QF complete, 2 SF remaining — today: France vs Spain)
+> **Prediction updated: July 15, 2026** (29 R32+R16+QF+SF complete, 1 SF remaining — today: England vs Argentina)
 
 ### Two Prediction Methods
 
@@ -96,8 +96,10 @@ Every match is predicted using two independent approaches that run in parallel:
 
 | Match | Home | Away | Pipeline Pred | Pipeline % | MC % |
 |-------|------|------|---------------|-----------|------|
-| SF M101 | France | Spain | **Spain** | 61.0% | 59.5% |
-| SF M102 | England | Argentina | **Argentina** | 67.6% | 76.2% |
+| SF M101 | France | Spain | **Spain** | 61.0% | 59.5% | ✅ Spain 2-0 |
+| SF M102 | England | Argentina | **Argentina** | 67.6% | 76.1% |
+
+**SF accuracy (1/2 complete): Pipeline 1/1 (100.0%)** — Spain 2-0 France ✅
 
 ### Third Place Match
 
@@ -110,9 +112,9 @@ Every match is predicted using two independent approaches that run in parallel:
 ### Path to the Final
 
 - **Argentina:** Cape Verde (R32, 96.8%) ✅ → Egypt (R16, 93.4%) ✅ → Switzerland (QF, 74.0%) ✅ → England (SF, 67.6%) → Spain (Final, 66.1%)
-- **Spain:** Austria (R32, 74.0%) ✅ → Portugal (R16, 66.1%) ✅ → Belgium (QF, 67.6%) ✅ → France (SF, 61.0%) → Argentina (Final, 33.9%)
+- **Spain:** Austria (R32, 74.0%) ✅ → Portugal (R16, 66.1%) ✅ → Belgium (QF, 67.6%) ✅ → France (SF, 61.0%) ✅ → Argentina (Final, 33.9%)
 - **England:** DR Congo (R32, 90.8%) ✅ → Mexico (R16, 67.6%) ✅ → Norway (QF, 67.6%) ✅ → Argentina (SF, 32.4%) → France (3rd)
-- **France:** Sweden (R32, 74.0%) ✅ → Paraguay (R16, 67.6%) ✅ → Morocco (QF, 66.1%) ✅ → Spain (SF, 39.0%) → England (3rd)
+- **France:** Sweden (R32, 74.0%) ✅ → Paraguay (R16, 67.6%) ✅ → Morocco (QF, 66.1%) ✅ → Spain (SF, 39.0%) ❌ → England (3rd)
 - **Norway:** Côte d'Ivoire (R32, 61.0%) ✅ → Brazil (R16, 26.0%) ✅ → England (QF, 32.4%) ❌
 
 ## How It Works
@@ -210,15 +212,15 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 
 **Note:** WC knockout calibration is weaker than overall calibration. At 80-90% confidence on WC matches specifically, actual accuracy is ~57%. The model is aware of this and applies WC-specific calibration for knockout predictions.
 
-### 2026 WC Backtest (100 matches: 72 group + 28 KO)
+### 2026 WC Backtest (101 matches: 72 group + 29 KO)
 
 | Metric | Value |
 |--------|-------|
-| **Accuracy** | 67.0% (67/100) |
-| **Log-loss** | 0.7641 |
-| **Brier score** | 0.1551 |
+| **Accuracy** | 67.3% (68/101) |
+| **Log-loss** | 0.7600 |
+| **Brier score** | 0.1545 |
 
-**Per-stage:** Group 45/72 (62.5%, LL 0.8806) | R32 18/24 (75.0%, LL 0.4945) | R16 4/4 (100.0%, LL 0.2843)
+**Per-stage:** Group 45/72 (62.5%, LL 0.8792) | R32 18/24 (75.0%, LL 0.4884) | R16 4/4 (100.0%, LL 0.2893) | QF 4/4 (100.0%, LL 0.5808) | SF 1/1 (100.0%)
 
 ### Model Evolution
 
