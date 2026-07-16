@@ -4,7 +4,7 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 ## 2026 World Cup Prediction
 
-> **Prediction updated: July 15, 2026** (29 R32+R16+QF+SF complete, 1 SF remaining — today: England vs Argentina)
+> **Prediction updated: July 16, 2026** (30 R32+R16+QF+SF complete — 3rd place + Final remaining)
 
 ### Two Prediction Methods
 
@@ -97,25 +97,24 @@ Every match is predicted using two independent approaches that run in parallel:
 | Match | Home | Away | Pipeline Pred | Pipeline % | MC % |
 |-------|------|------|---------------|-----------|------|
 | SF M101 | France | Spain | **Spain** | 61.0% | 59.5% | ✅ Spain 2-0 |
-| SF M102 | England | Argentina | **Argentina** | 67.6% | 76.1% |
+| SF M102 | England | Argentina | **Argentina** | 67.6% | 76.1% | ✅ Argentina 2-1 |
 
-**SF accuracy (1/2 complete): Pipeline 1/1 (100.0%)** — Spain 2-0 France ✅
+**SF accuracy (2/2 complete): Pipeline 2/2 (100.0%)** — Spain 2-0 France ✅, Argentina 2-1 England ✅
 
 ### Third Place Match
 
-- France vs England → **England** (Pipeline 61.0% | MC 59.4%)
+- France vs England → **England** (Pipeline 61.0% | MC 53.5%) — July 18, Miami Gardens
 
 ### Final
 
-- Spain vs Argentina → **Argentina** (Pipeline 66.1% | MC 56.0%)
+- Spain vs Argentina → **Argentina** (Pipeline 66.1% | MC 73.1%) — July 19, East Rutherford
 
 ### Path to the Final
 
-- **Argentina:** Cape Verde (R32, 96.8%) ✅ → Egypt (R16, 93.4%) ✅ → Switzerland (QF, 74.0%) ✅ → England (SF, 67.6%) → Spain (Final, 66.1%)
+- **Argentina:** Cape Verde (R32, 96.8%) ✅ → Egypt (R16, 93.4%) ✅ → Switzerland (QF, 74.0%) ✅ → England (SF, 67.6%) ✅ → Spain (Final, 66.1%)
 - **Spain:** Austria (R32, 74.0%) ✅ → Portugal (R16, 66.1%) ✅ → Belgium (QF, 67.6%) ✅ → France (SF, 61.0%) ✅ → Argentina (Final, 33.9%)
-- **England:** DR Congo (R32, 90.8%) ✅ → Mexico (R16, 67.6%) ✅ → Norway (QF, 67.6%) ✅ → Argentina (SF, 32.4%) → France (3rd)
-- **France:** Sweden (R32, 74.0%) ✅ → Paraguay (R16, 67.6%) ✅ → Morocco (QF, 66.1%) ✅ → Spain (SF, 39.0%) ❌ → England (3rd)
-- **Norway:** Côte d'Ivoire (R32, 61.0%) ✅ → Brazil (R16, 26.0%) ✅ → England (QF, 32.4%) ❌
+- **England:** DR Congo (R32, 90.8%) ✅ → Mexico (R16, 67.6%) ✅ → Norway (QF, 67.6%) ✅ → Argentina (SF, 32.4%) ❌ → France (3rd, 61.0%)
+- **France:** Sweden (R32, 74.0%) ✅ → Paraguay (R16, 67.6%) ✅ → Morocco (QF, 66.1%) ✅ → Spain (SF, 39.0%) ❌ → England (3rd, 39.0%)
 
 ## How It Works
 
@@ -212,15 +211,15 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 
 **Note:** WC knockout calibration is weaker than overall calibration. At 80-90% confidence on WC matches specifically, actual accuracy is ~57%. The model is aware of this and applies WC-specific calibration for knockout predictions.
 
-### 2026 WC Backtest (101 matches: 72 group + 29 KO)
+### 2026 WC Backtest (102 matches: 72 group + 30 KO)
 
 | Metric | Value |
 |--------|-------|
-| **Accuracy** | 67.3% (68/101) |
-| **Log-loss** | 0.7600 |
-| **Brier score** | 0.1545 |
+| **Accuracy** | 67.6% (69/102) |
+| **Log-loss** | 0.7580 |
+| **Brier score** | 0.1538 |
 
-**Per-stage:** Group 45/72 (62.5%, LL 0.8792) | R32 18/24 (75.0%, LL 0.4884) | R16 4/4 (100.0%, LL 0.2893) | QF 4/4 (100.0%, LL 0.5808) | SF 1/1 (100.0%)
+**Per-stage:** Group 45/72 (62.5%, LL 0.8806) | R32+R16 18/24 (75.0%, LL 0.4945) | QF+SF 6/6 (100.0%)
 
 ### Model Evolution
 
@@ -232,7 +231,7 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 | V4 (squad values) | 64.5% | 0.8897 | 0.1797 | +4 squad value features |
 | V5 (walk-forward) | 59.6% | **0.8795** | **0.1724** | 11,909-match validation |
 | V6 (LightGBM) | 63.0% | **0.8328** | **0.1682** | LightGBM, +15 features, tradition dropped, R32 stage detection + neutral flag fix |
-| V7 (MC Sim) | **67.0%** | **0.7618** | **0.1547** | Added Dixon-Coles Monte Carlo simulation (100K per match), fixed R16/QF/SF completed-match detection, QF 4/4 |
+| V7 (MC Sim) | **67.6%** | **0.7580** | **0.1538** | Added Dixon-Coles Monte Carlo simulation (100K per match), fixed R16/QF/SF completed-match detection, QF 4/4, SF 2/2 |
 
 ## Data Sources
 
