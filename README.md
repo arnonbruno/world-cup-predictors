@@ -4,7 +4,7 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 ## 2026 World Cup Prediction
 
-> **Prediction updated: July 18, 2026** (102 matches complete — 3rd place today, Final tomorrow)
+> **Prediction updated: July 19, 2026** (103 matches complete — Final today: Spain vs Argentina)
 
 ### Two Prediction Methods
 
@@ -104,6 +104,7 @@ Every match is predicted using two independent approaches that run in parallel:
 ### Third Place Match
 
 - France vs England → **England** (Pipeline 61.0% | MC 53.5%) — July 18, Miami Gardens
+- **Result: France 4-6 England** ✅ — England predicted correctly (61.0%). Highest-scoring match of the tournament (10 goals). England's best WC finish since 1966.
 
 ### Final
 
@@ -211,15 +212,17 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 
 **Note:** WC knockout calibration is weaker than overall calibration. At 80-90% confidence on WC matches specifically, actual accuracy is ~57%. The model is aware of this and applies WC-specific calibration for knockout predictions.
 
-### 2026 WC Backtest (102 matches: 72 group + 30 KO)
+### 2026 WC Backtest (103 matches: 72 group + 31 KO)
 
 | Metric | Value |
 |--------|-------|
-| **Accuracy** | 67.6% (69/102) |
-| **Log-loss** | 0.7580 |
+| **Accuracy** | 68.0% (70/103) |
+| **Log-loss** | 0.7570 |
 | **Brier score** | 0.1538 |
 
-**Per-stage:** Group 45/72 (62.5%, LL 0.8806) | R32+R16 18/24 (75.0%, LL 0.4945) | QF+SF 6/6 (100.0%)
+**Per-stage:** Group 45/72 (62.5%, LL 0.8806) | R32+R16 18/24 (75.0%, LL 0.4945) | QF 4/4 (100.0%, LL 0.2843) | SF+3rd 3/3 (100.0%, LL 0.5213)
+
+**Note on stage labels:** The backtest's `wc2026_stage_for_match()` groups matches by date cutoffs. R32+R16 collapse into one bucket (stage 1), QF into another (stage 2), and SF+3rd place into a third (stage 3). The 3rd place match (France 4-6 England, July 18) was predicted correctly at 61.0%.
 
 ### Model Evolution
 
@@ -231,7 +234,7 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 | V4 (squad values) | 64.5% | 0.8897 | 0.1797 | +4 squad value features |
 | V5 (walk-forward) | 59.6% | **0.8795** | **0.1724** | 11,909-match validation |
 | V6 (LightGBM) | 63.0% | **0.8328** | **0.1682** | LightGBM, +15 features, tradition dropped, R32 stage detection + neutral flag fix |
-| V7 (MC Sim) | **67.6%** | **0.7580** | **0.1538** | Added Dixon-Coles Monte Carlo simulation (100K per match), fixed R16/QF/SF completed-match detection, QF 4/4, SF 2/2 |
+| V7 (MC Sim) | **68.0%** | **0.7570** | **0.1538** | Added Dixon-Coles Monte Carlo simulation (100K per match), fixed R16/QF/SF completed-match detection, QF 4/4, SF 2/2, 3rd place correct (61.0%) |
 
 ## Data Sources
 
