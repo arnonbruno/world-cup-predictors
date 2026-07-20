@@ -4,7 +4,7 @@ Machine learning system that predicts FIFA World Cup match outcomes and tourname
 
 ## 2026 World Cup Prediction
 
-> **Prediction updated: July 19, 2026** (103 matches complete — Final today: Spain vs Argentina)
+> **Prediction updated: July 20, 2026** (104 matches complete — Tournament finished: Spain are World Champions)
 
 ### Two Prediction Methods
 
@@ -16,12 +16,12 @@ Every match is predicted using two independent approaches that run in parallel:
 
 **Why both?** The pipeline incorporates LGBM's pattern recognition (form, streaks, momentum) on top of the DC goal model, while the MC simulation gives a pure goal-level view from the DC model alone. When both agree, confidence is high. When they diverge, the gap reflects information the goal model can't see.
 
-| Place | Team | Probability |
-|-------|------|-------------|
-| 🥇 Champion | **Argentina** | 66.1% |
-| 🥈 Runner-up | **Spain** | — |
-| 🥉 Third | **England** | 61.0% (vs France) |
-| 4th | **France** | — |
+| Place | Team | Probability | Actual |
+|-------|------|-------------|--------|
+| 🥇 Champion | **Spain** | 33.9% | ✅ Spain 1-0 Argentina (a.e.t.) |
+| 🥈 Runner-up | **Argentina** | 66.1% | ❌ Model predicted Argentina |
+| 🥉 Third | **England** | 61.0% (vs France) | ✅ France 4-6 England |
+| 4th | **France** | — | ✅ |
 
 ### Group Stage Results (all 72 matches complete)
 
@@ -109,13 +109,14 @@ Every match is predicted using two independent approaches that run in parallel:
 ### Final
 
 - Spain vs Argentina → **Argentina** (Pipeline 66.1% | MC 73.1%) — July 19, East Rutherford
+- **Result: Spain 1-0 Argentina (a.e.t.)** ❌ — Model predicted Argentina at 66.1% but Spain won in extra time. Ferran Torres scored the winner. Spain's 2nd World Cup title (after 2010). Argentina denied back-to-back titles.
 
 ### Path to the Final
 
-- **Argentina:** Cape Verde (R32, 96.8%) ✅ → Egypt (R16, 93.4%) ✅ → Switzerland (QF, 74.0%) ✅ → England (SF, 67.6%) ✅ → Spain (Final, 66.1%)
-- **Spain:** Austria (R32, 74.0%) ✅ → Portugal (R16, 66.1%) ✅ → Belgium (QF, 67.6%) ✅ → France (SF, 61.0%) ✅ → Argentina (Final, 33.9%)
-- **England:** DR Congo (R32, 90.8%) ✅ → Mexico (R16, 67.6%) ✅ → Norway (QF, 67.6%) ✅ → Argentina (SF, 32.4%) ❌ → France (3rd, 61.0%)
-- **France:** Sweden (R32, 74.0%) ✅ → Paraguay (R16, 67.6%) ✅ → Morocco (QF, 66.1%) ✅ → Spain (SF, 39.0%) ❌ → England (3rd, 39.0%)
+- **Spain (CHAMPIONS):** Austria (R32, 74.0%) ✅ → Portugal (R16, 66.1%) ✅ → Belgium (QF, 67.6%) ✅ → France (SF, 61.0%) ✅ → Argentina (Final, 33.9%) ✅
+- **Argentina (Runner-up):** Cape Verde (R32, 96.8%) ✅ → Egypt (R16, 93.4%) ✅ → Switzerland (QF, 74.0%) ✅ → England (SF, 67.6%) ✅ → Spain (Final, 66.1%) ❌
+- **England (3rd):** DR Congo (R32, 90.8%) ✅ → Mexico (R16, 67.6%) ✅ → Norway (QF, 67.6%) ✅ → Argentina (SF, 32.4%) ❌ → France (3rd, 61.0%) ✅
+- **France (4th):** Sweden (R32, 74.0%) ✅ → Paraguay (R16, 67.6%) ✅ → Morocco (QF, 66.1%) ✅ → Spain (SF, 39.0%) ❌ → England (3rd, 39.0%) ❌
 
 ## How It Works
 
@@ -212,17 +213,17 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 
 **Note:** WC knockout calibration is weaker than overall calibration. At 80-90% confidence on WC matches specifically, actual accuracy is ~57%. The model is aware of this and applies WC-specific calibration for knockout predictions.
 
-### 2026 WC Backtest (103 matches: 72 group + 31 KO)
+### 2026 WC Backtest (104 matches: 72 group + 32 KO)
 
 | Metric | Value |
 |--------|-------|
-| **Accuracy** | 68.0% (70/103) |
-| **Log-loss** | 0.7570 |
-| **Brier score** | 0.1538 |
+| **Accuracy** | 67.3% (70/104) |
+| **Log-loss** | 0.7593 |
+| **Brier score** | 0.1549 |
 
-**Per-stage:** Group 45/72 (62.5%, LL 0.8806) | R32+R16 18/24 (75.0%, LL 0.4945) | QF 4/4 (100.0%, LL 0.2843) | SF+3rd 3/3 (100.0%, LL 0.5213)
+**Per-stage:** Group 45/72 (62.5%, LL 0.8806) | R32+R16 18/24 (75.0%, LL 0.4945) | QF 4/4 (100.0%, LL 0.2843) | SF+3rd 3/3 (100.0%, LL 0.5213) | Final 0/1 (0.0%, LL 1.0020)
 
-**Note on stage labels:** The backtest's `wc2026_stage_for_match()` groups matches by date cutoffs. R32+R16 collapse into one bucket (stage 1), QF into another (stage 2), and SF+3rd place into a third (stage 3). The 3rd place match (France 4-6 England, July 18) was predicted correctly at 61.0%.
+**Note on stage labels:** The backtest's `wc2026_stage_for_match()` groups matches by date cutoffs. R32+R16 collapse into one bucket (stage 1), QF into another (stage 2), SF+3rd place into a third (stage 3), and the Final into a fourth (stage 4). The Final (Spain 1-0 Argentina, July 19) was the only miss in the knockout rounds — model predicted Argentina at 66.1% but Spain won in extra time.
 
 ### Model Evolution
 
@@ -234,7 +235,7 @@ The primary validation uses all matches from 2014 onwards with walk-forward pred
 | V4 (squad values) | 64.5% | 0.8897 | 0.1797 | +4 squad value features |
 | V5 (walk-forward) | 59.6% | **0.8795** | **0.1724** | 11,909-match validation |
 | V6 (LightGBM) | 63.0% | **0.8328** | **0.1682** | LightGBM, +15 features, tradition dropped, R32 stage detection + neutral flag fix |
-| V7 (MC Sim) | **68.0%** | **0.7570** | **0.1538** | Added Dixon-Coles Monte Carlo simulation (100K per match), fixed R16/QF/SF completed-match detection, QF 4/4, SF 2/2, 3rd place correct (61.0%) |
+| V7 (MC Sim + Final) | **67.3%** | **0.7593** | **0.1549** | Added Dixon-Coles Monte Carlo simulation (100K per match), fixed R16/QF/SF completed-match detection, QF 4/4, SF 2/2, 3rd place correct (61.0%), Final miss (Spain 1-0 Argentina) |
 
 ## Data Sources
 
